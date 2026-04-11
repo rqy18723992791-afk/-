@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>学院图书数字化管理平台 - 智慧图书馆</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -11,19 +12,22 @@
     <style>
         body { font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif; }
         .academic-bg { background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); }
+        /* 防止页面加载前的闪烁 */
+        [v-cloak] { display: none; }
     </style>
 </head>
 <body class="bg-slate-50">
     <div id="root"></div>
 
     <script type="module">
+        // 显式导入 Firebase 模块，确保电脑端加载链路完整
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot, collection, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useCallback } = React;
 
-        // --- Firebase 配置 ---
+        // --- 环境参数获取 ---
         const firebaseConfig = JSON.parse(__firebase_config);
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
@@ -32,7 +36,9 @@
 
         // 图标组件封装
         const Icon = ({ name, size = 18, className = "" }) => {
-            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
+            useEffect(() => { 
+                if (window.lucide) window.lucide.createIcons(); 
+            }, [name]);
             return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         };
 
@@ -41,63 +47,78 @@
             const [view, setView] = useState('login'); 
             const [libData, setLibData] = useState({ users: [], books: [], loans: [] });
             const [loading, setLoading] = useState(true);
-            const [firebaseUser, setFirebaseUser] = useState(null);
+            const [fbUser, setFbUser] = useState(null);
 
-            // 1. 初始化匿名身份认证（云端访问权限）
+            // 1. 核心认证逻辑 (遵循 RULE 3)
             useEffect(() => {
                 const initAuth = async () => {
                     try {
-                        await signInAnonymously(auth);
-                    } catch (e) { console.error("Auth Error", e); }
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (e) {
+                        console.error("认证失败，请检查网络连接", e);
+                    }
                 };
                 initAuth();
                 const unsubscribe = onAuthStateChanged(auth, (u) => {
-                    setFirebaseUser(u);
+                    setFbUser(u);
                 });
                 return () => unsubscribe();
             }, []);
 
-            // 2. 实时监听云端数据库
+            // 2. 数据监听逻辑 (遵循 RULE 1 & 2)
             useEffect(() => {
-                if (!firebaseUser) return;
+                if (!fbUser) return;
 
-                // 监听公共数据 (书籍和借阅记录)
-                const dataDoc = doc(db_fs, 'artifacts', appId, 'public', 'data');
-                const unsubscribe = onSnapshot(dataDoc, (docSnap) => {
+                const dataDocRef = doc(db_fs, 'artifacts', appId, 'public', 'data');
+                
+                // 设置监听器
+                const unsubscribe = onSnapshot(dataDocRef, (docSnap) => {
                     if (docSnap.exists()) {
-                        setLibData(prev => ({ ...prev, ...docSnap.data() }));
+                        const data = docSnap.data();
+                        setLibData(data);
                     } else {
-                        // 如果云端没数据，初始化一份
+                        // 首次运行初始化
                         const initial = {
                             users: [
                                 { id: 'ADMIN001', account: '18723992791', password: 'rqy18723992791', role: 'SUPER_ADMIN', name: '系统管理员', status: '正常' }
                             ],
-                            books: [
-                                { id: 'B001', isbn: '9787111532644', title: '示例图书: 深入理解计算机系统', author: 'Bryant', stock: 10, available: 10, location: '主馆', callNumber: 'TP312', cover: '' }
-                            ],
+                            books: [],
                             loans: []
                         };
-                        setDoc(dataDoc, initial);
+                        setDoc(dataDocRef, initial);
                         setLibData(initial);
                     }
                     setLoading(false);
-                }, (err) => {
-                    console.error("Firestore Error", err);
+                }, (error) => {
+                    console.error("云端数据同步错误:", error);
                     setLoading(false);
                 });
 
-                // 恢复本地登录会话
+                // 会话恢复
                 const session = localStorage.getItem('LIB_SESSION_CLOUD');
-                if (session) setUser(JSON.parse(session));
+                if (session) {
+                    try {
+                        setUser(JSON.parse(session));
+                    } catch (e) {
+                        localStorage.removeItem('LIB_SESSION_CLOUD');
+                    }
+                }
 
                 return () => unsubscribe();
-            }, [firebaseUser]);
+            }, [fbUser]);
 
-            // 同步数据到云端
-            const syncToCloud = async (newData) => {
-                if (!firebaseUser) return;
-                setLibData(newData); // 先更新 UI
-                await setDoc(doc(db_fs, 'artifacts', appId, 'public', 'data'), newData);
+            // 同步方法
+            const syncDb = async (newData) => {
+                if (!fbUser) return;
+                try {
+                    await setDoc(doc(db_fs, 'artifacts', appId, 'public', 'data'), newData);
+                } catch (e) {
+                    console.error("云端写入失败", e);
+                }
             };
 
             const handleLogin = (u) => {
@@ -113,24 +134,24 @@
             };
 
             if (loading) return (
-                <div className="h-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
-                    <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-                    <div className="font-bold text-slate-500">正在同步云端馆藏资源...</div>
+                <div className="h-screen flex flex-col items-center justify-center bg-slate-50">
+                    <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+                    <p className="text-slate-400 font-bold animate-pulse text-sm">正在建立云端加密通道...</p>
                 </div>
             );
 
             return (
                 <div className="h-screen w-full">
                     {user && view === 'app' ? (
-                        <MainDashboard user={user} db={libData} syncDb={syncToCloud} onLogout={handleLogout} />
+                        <MainDashboard user={user} db={libData} syncDb={syncDb} onLogout={handleLogout} />
                     ) : (
-                        <AuthGateway view={view} setView={setView} db={libData} onLogin={handleLogin} syncDb={syncToCloud} />
+                        <AuthGateway view={view} setView={setView} db={libData} onLogin={handleLogin} syncDb={syncDb} />
                     )}
                 </div>
             );
         }
 
-        // --- 认证页面 ---
+        // --- 认证视图 ---
         function AuthGateway({ view, setView, db, onLogin, syncDb }) {
             const [form, setForm] = useState({ acc: '', pw: '', name: '', id: '', phone: '' });
             const [error, setError] = useState('');
@@ -139,12 +160,12 @@
                 e.preventDefault();
                 const found = db.users.find(u => (u.account === form.acc || u.id === form.acc) && u.password === form.pw);
                 if (found) onLogin(found);
-                else setError('账号或密码错误');
+                else setError('账号或密码不匹配');
             };
 
             const register = (e) => {
                 e.preventDefault();
-                if (db.users.find(u => u.id === form.id)) return alert('该 ID 已被注册');
+                if (db.users.find(u => u.id === form.id)) return alert('学号/ID 已被注册');
                 const newUser = { id: form.id, account: form.phone, phone: form.phone, password: form.pw, name: form.name, role: 'READER', status: '正常' };
                 syncDb({ ...db, users: [...db.users, newUser] });
                 alert('注册成功，请登录');
@@ -153,37 +174,37 @@
 
             return (
                 <div className="h-screen flex items-center justify-center academic-bg p-4">
-                    <div className="bg-white p-10 rounded-3xl shadow-2xl w-full max-w-md space-y-6 animate-in zoom-in-95 duration-300">
-                        <div className="text-center">
-                            <div className="w-16 h-16 bg-indigo-600 rounded-2xl mx-auto mb-4 flex items-center justify-center text-white shadow-lg">
+                    <div className="bg-white p-8 md:p-12 rounded-[2.5rem] shadow-2xl w-full max-w-md space-y-6">
+                        <div className="text-center space-y-2">
+                            <div className="w-16 h-16 bg-indigo-600 rounded-3xl mx-auto flex items-center justify-center text-white shadow-xl shadow-indigo-200">
                                 <Icon name="library" size={32} />
                             </div>
-                            <h1 className="text-2xl font-black text-slate-800 tracking-tight">智慧图书馆云端接入</h1>
-                            <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest font-bold">Cloud-Based Library Service</p>
+                            <h1 className="text-2xl font-black text-slate-800">智慧图书馆</h1>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Cloud Access Protocol</p>
                         </div>
                         <form onSubmit={view === 'login' ? login : register} className="space-y-4">
                             {view === 'register' && (
-                                <div className="grid grid-cols-2 gap-4">
-                                    <input className="border p-3 rounded-xl text-sm outline-none focus:ring-2 ring-indigo-500" placeholder="姓名" required onChange={e=>setForm({...form, name: e.target.value})} />
-                                    <input className="border p-3 rounded-xl text-sm outline-none focus:ring-2 ring-indigo-500" placeholder="学号/ID" required onChange={e=>setForm({...form, id: e.target.value})} />
+                                <div className="grid grid-cols-2 gap-3">
+                                    <input className="border p-3 rounded-2xl text-sm bg-slate-50 outline-none focus:ring-2 ring-indigo-500 transition-all" placeholder="姓名" required onChange={e=>setForm({...form, name: e.target.value})} />
+                                    <input className="border p-3 rounded-2xl text-sm bg-slate-50 outline-none focus:ring-2 ring-indigo-500 transition-all" placeholder="学号/ID" required onChange={e=>setForm({...form, id: e.target.value})} />
                                 </div>
                             )}
-                            <input className="w-full border p-3 rounded-xl text-sm outline-none focus:ring-2 ring-indigo-500" placeholder="账号/手机/学号" required onChange={e=>setForm({...form, acc: e.target.value, phone: e.target.value})} />
-                            <input className="w-full border p-3 rounded-xl text-sm outline-none focus:ring-2 ring-indigo-500" type="password" placeholder="密码" required onChange={e=>setForm({...form, pw: e.target.value})} />
-                            {error && <div className="text-red-500 text-xs font-bold text-center">⚠ {error}</div>}
-                            <button className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 active:scale-95">
-                                {view === 'login' ? '进入系统' : '完成注册'}
+                            <input className="w-full border p-3 rounded-2xl text-sm bg-slate-50 outline-none focus:ring-2 ring-indigo-500 transition-all" placeholder="账号/手机" required onChange={e=>setForm({...form, acc: e.target.value, phone: e.target.value})} />
+                            <input className="w-full border p-3 rounded-2xl text-sm bg-slate-50 outline-none focus:ring-2 ring-indigo-500 transition-all" type="password" placeholder="密码" required onChange={e=>setForm({...form, pw: e.target.value})} />
+                            {error && <div className="text-red-500 text-xs font-bold text-center italic">{error}</div>}
+                            <button className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 active:scale-95 transition-all">
+                                {view === 'login' ? '授权登录' : '提交注册'}
                             </button>
                         </form>
                         <button onClick={() => setView(view === 'login' ? 'register' : 'login')} className="w-full text-xs text-slate-400 font-bold hover:text-indigo-600">
-                            {view === 'login' ? '还没有账号？新读者注册' : '已有账号？返回登录'}
+                            {view === 'login' ? '没有账号？申请加入' : '已有账号？返回登录'}
                         </button>
                     </div>
                 </div>
             );
         }
 
-        // --- 主界面 ---
+        // --- 主面板 ---
         function MainDashboard({ user, db, syncDb, onLogout }) {
             const [activeTab, setActiveTab] = useState(user.role === 'READER' ? 'catalog' : 'inventory');
 
@@ -198,41 +219,40 @@
 
             return (
                 <div className="flex h-full overflow-hidden">
-                    <aside className="w-64 bg-slate-900 text-white flex flex-col">
+                    <aside className="w-64 bg-slate-900 text-white flex flex-col shrink-0">
                         <div className="p-8 font-black text-xl flex items-center gap-3">
-                            <div className="bg-indigo-500 p-2 rounded-lg shadow-lg shadow-indigo-500/30"><Icon name="library" size={20} /></div>
+                            <div className="bg-indigo-600 p-2 rounded-xl shadow-lg shadow-indigo-500/20"><Icon name="library" size={20} /></div>
                             <span>智慧图书馆</span>
                         </div>
-                        <nav className="flex-1 p-4 space-y-1">
+                        <nav className="flex-1 px-4 space-y-1">
                             {menu.map(item => (
-                                <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all ${activeTab === item.id ? 'bg-white/10 text-white border border-white/10' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
+                                <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all ${activeTab === item.id ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
                                     <Icon name={item.icon} size={20} />
                                     <span className="text-sm font-bold">{item.label}</span>
                                 </button>
                             ))}
                         </nav>
-                        <div className="p-4 m-4 bg-slate-800/50 border border-white/5 rounded-2xl">
-                            <div className="flex items-center gap-3 mb-4">
-                                <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center font-bold text-lg">{user.name[0]}</div>
-                                <div className="truncate flex-1">
-                                    <div className="text-xs font-bold truncate">{user.name}</div>
-                                    <div className="text-[9px] text-slate-500 uppercase font-black">{user.role === 'READER' ? '普通读者' : '管理员'}</div>
+                        <div className="p-6">
+                            <div className="bg-slate-800 p-4 rounded-3xl border border-white/5 space-y-4">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center font-black">{user.name[0]}</div>
+                                    <div className="overflow-hidden">
+                                        <div className="text-xs font-bold truncate">{user.name}</div>
+                                        <div className="text-[8px] text-slate-500 font-black uppercase tracking-widest">{user.role}</div>
+                                    </div>
                                 </div>
+                                <button onClick={onLogout} className="w-full py-2 bg-slate-900 text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-red-400 transition-colors border border-white/5 rounded-xl">Logout</button>
                             </div>
-                            <button onClick={onLogout} className="w-full py-2 bg-slate-900/50 text-slate-400 hover:text-red-400 rounded-lg text-[10px] font-black uppercase tracking-widest border border-white/5 transition-colors">Logout</button>
                         </div>
                     </aside>
-                    <main className="flex-1 overflow-auto bg-slate-50 relative">
-                        <header className="h-16 bg-white/80 backdrop-blur-md border-b px-10 flex items-center justify-between sticky top-0 z-20">
-                            <h2 className="font-black text-slate-800 flex items-center gap-2">
-                                <Icon name={menu.find(m=>m.id===activeTab)?.icon} size={18} className="text-indigo-600"/>
+                    <main className="flex-1 overflow-auto bg-slate-50">
+                        <header className="h-16 bg-white/80 backdrop-blur-md border-b px-10 flex items-center justify-between sticky top-0 z-30">
+                            <h2 className="font-black text-slate-800 flex items-center gap-3 text-lg">
+                                <Icon name={menu.find(m=>m.id===activeTab)?.icon} className="text-indigo-600"/>
                                 {menu.find(m => m.id === activeTab)?.label}
                             </h2>
-                            <div className="flex items-center gap-4">
-                                <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-600 rounded-full border border-green-100">
-                                    <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
-                                    <span className="text-[10px] font-black uppercase tracking-tighter">Cloud Synchronized</span>
-                                </div>
+                            <div className="flex items-center gap-3">
+                                <span className="px-3 py-1 bg-indigo-50 text-indigo-600 text-[10px] font-black rounded-full border border-indigo-100 uppercase tracking-tighter">Secure Cloud Live</span>
                             </div>
                         </header>
                         <div className="p-10 max-w-7xl mx-auto">
@@ -246,13 +266,13 @@
             );
         }
 
-        // --- 馆藏检索 ---
+        // --- 子组件: 馆藏检索 ---
         function CatalogView({ db, syncDb, user }) {
             const [search, setSearch] = useState('');
-            const filteredBooks = db.books.filter(b => b.title.includes(search) || b.author.includes(search));
+            const filteredBooks = db.books.filter(b => b.title.toLowerCase().includes(search.toLowerCase()) || b.author.includes(search));
 
             const handleBorrow = async (book) => {
-                if (book.available <= 0) return alert('库存不足');
+                if (book.available <= 0) return alert('该图书目前无在馆复本');
                 const dueDate = new Date();
                 dueDate.setDate(dueDate.getDate() + 30);
 
@@ -269,38 +289,37 @@
 
                 const updatedBooks = db.books.map(b => b.id === book.id ? { ...b, available: b.available - 1 } : b);
                 await syncDb({ ...db, books: updatedBooks, loans: [...db.loans, newLoan] });
-                alert('借阅成功！书籍已预留。');
+                alert('借阅成功，请前往服务台领取');
             };
 
             return (
-                <div className="space-y-8 animate-in fade-in slide-in-from-top-2 duration-500">
+                <div className="space-y-8">
                     <div className="relative group">
                         <Icon name="search" size={24} className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-indigo-500 transition-colors" />
-                        <input className="w-full pl-16 pr-6 py-6 bg-white border border-slate-200 rounded-3xl outline-none focus:ring-4 ring-indigo-500/10 shadow-sm text-lg font-medium" placeholder="搜索书名、作者或 ISBN..." value={search} onChange={e=>setSearch(e.target.value)} />
+                        <input className="w-full pl-16 pr-6 py-6 bg-white border border-slate-200 rounded-[2rem] outline-none shadow-sm text-lg font-medium transition-all focus:ring-4 ring-indigo-500/10" placeholder="检索书名、作者或 ISBN..." value={search} onChange={e=>setSearch(e.target.value)} />
                     </div>
-
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         {filteredBooks.map(book => (
-                            <div key={book.id} className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex gap-6 hover:shadow-xl hover:scale-[1.01] transition-all duration-300">
-                                <div className="w-28 h-40 bg-slate-50 rounded-2xl flex items-center justify-center flex-shrink-0 overflow-hidden border border-slate-100 shadow-inner">
-                                    {book.cover ? <img src={book.cover} className="w-full h-full object-cover" /> : <Icon name="book-open" size={32} className="text-slate-200" />}
+                            <div key={book.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 flex gap-6 hover:shadow-xl transition-all duration-300 group">
+                                <div className="w-28 h-40 bg-slate-50 rounded-2xl flex-shrink-0 overflow-hidden border border-slate-100 flex items-center justify-center">
+                                    {book.cover ? <img src={book.cover} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" /> : <Icon name="book" size={32} className="text-slate-200" />}
                                 </div>
-                                <div className="flex-1 flex flex-col justify-between">
+                                <div className="flex-1 flex flex-col justify-between py-1">
                                     <div>
                                         <h3 className="text-lg font-black text-slate-800 line-clamp-1">{book.title}</h3>
-                                        <p className="text-sm text-slate-400 font-bold mb-2">{book.author}</p>
-                                        <div className="flex gap-2 flex-wrap">
-                                            <span className="px-2 py-1 bg-slate-100 text-slate-500 text-[10px] font-black rounded italic">{book.callNumber}</span>
-                                            <span className="px-2 py-1 bg-indigo-50 text-indigo-500 text-[10px] font-black rounded">{book.location}</span>
+                                        <p className="text-sm text-slate-400 font-bold mb-3 italic">{book.author}</p>
+                                        <div className="flex gap-2">
+                                            <span className="px-2 py-1 bg-slate-100 text-slate-500 text-[9px] font-black rounded uppercase">{book.callNumber}</span>
+                                            <span className="px-2 py-1 bg-indigo-50 text-indigo-500 text-[9px] font-black rounded uppercase">{book.location}</span>
                                         </div>
                                     </div>
-                                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-50">
+                                    <div className="flex items-center justify-between mt-4">
                                         <div>
-                                            <div className={`text-xs font-black ${book.available > 0 ? 'text-green-500' : 'text-red-400'}`}>{book.available > 0 ? '在馆' : '离馆'}</div>
-                                            <div className="text-[10px] text-slate-300 font-bold uppercase">库存 {book.available}/{book.stock}</div>
+                                            <div className={`text-xs font-black ${book.available > 0 ? 'text-green-500' : 'text-red-400'}`}>{book.available > 0 ? '在馆可借' : '全数借出'}</div>
+                                            <div className="text-[10px] text-slate-300 font-bold">库存: {book.available}/{book.stock}</div>
                                         </div>
                                         {user.role === 'READER' && (
-                                            <button onClick={() => handleBorrow(book)} disabled={book.available <= 0} className={`px-6 py-2 rounded-xl text-xs font-black transition-all ${book.available > 0 ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700' : 'bg-slate-100 text-slate-300 cursor-not-allowed'}`}>申请借阅</button>
+                                            <button onClick={() => handleBorrow(book)} disabled={book.available <= 0} className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all ${book.available > 0 ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700' : 'bg-slate-100 text-slate-300'}`}>立即借阅</button>
                                         )}
                                     </div>
                                 </div>
@@ -311,7 +330,7 @@
             );
         }
 
-        // --- 我的借阅 ---
+        // --- 子组件: 我的借阅 ---
         function MyLibraryView({ db, syncDb, user }) {
             const myLoans = db.loans.filter(l => l.userId === user.id && l.status === 'ACTIVE');
             
@@ -319,54 +338,53 @@
                 const updatedLoans = db.loans.map(l => l.id === loan.id ? { ...l, status: 'RETURNED' } : l);
                 const updatedBooks = db.books.map(b => b.id === loan.bookId ? { ...b, available: b.available + 1 } : b);
                 await syncDb({ ...db, loans: updatedLoans, books: updatedBooks });
-                alert('归还成功');
+                alert('图书归还申请已处理');
             };
 
             return (
-                <div className="space-y-8 animate-in fade-in">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                        <div className="bg-indigo-600 p-8 rounded-[2rem] text-white shadow-2xl shadow-indigo-200 flex flex-col justify-between">
-                            <Icon name="book-check" size={24} className="opacity-50" />
-                            <div className="mt-8"><div className="text-4xl font-black">{myLoans.length}</div><div className="text-[10px] font-black uppercase tracking-widest opacity-60">当前在借册数</div></div>
+                <div className="space-y-8">
+                    <div className="bg-indigo-600 p-10 rounded-[2.5rem] text-white flex justify-between items-center shadow-2xl shadow-indigo-100">
+                        <div>
+                            <div className="text-4xl font-black">{myLoans.length}</div>
+                            <div className="text-xs font-bold uppercase tracking-widest opacity-60 mt-2 text-indigo-200">Current Borrowings</div>
                         </div>
+                        <Icon name="book-check" size={48} className="opacity-20" />
                     </div>
-                    <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+                    <div className="bg-white rounded-[2rem] border border-slate-100 overflow-hidden">
                         <table className="w-full text-left">
-                            <thead className="bg-slate-50/50 border-b">
+                            <thead className="bg-slate-50 border-b">
                                 <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                                    <th className="px-10 py-5">图书名称</th>
-                                    <th className="px-10 py-5">借出日期</th>
+                                    <th className="px-10 py-5">书名</th>
                                     <th className="px-10 py-5">应还日期</th>
-                                    <th className="px-10 py-5 text-right">管理操作</th>
+                                    <th className="px-10 py-5 text-right">操作</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-50">
                                 {myLoans.map(loan => (
-                                    <tr key={loan.id} className="hover:bg-slate-50 transition-colors">
+                                    <tr key={loan.id} className="hover:bg-slate-50/50 transition-colors">
                                         <td className="px-10 py-6 font-black text-slate-700">{loan.title}</td>
-                                        <td className="px-10 py-6 text-slate-400 text-xs font-mono">{loan.borrowDate}</td>
-                                        <td className="px-10 py-6 text-indigo-600 text-xs font-black font-mono">{loan.dueDate}</td>
+                                        <td className="px-10 py-6 text-indigo-600 font-mono font-bold text-xs">{loan.dueDate}</td>
                                         <td className="px-10 py-6 text-right">
-                                            <button onClick={() => handleReturn(loan)} className="px-4 py-2 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black uppercase hover:bg-slate-200 transition-colors">归还图书</button>
+                                            <button onClick={() => handleReturn(loan)} className="px-4 py-2 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black uppercase hover:bg-slate-200">归还图书</button>
                                         </td>
                                     </tr>
                                 ))}
-                                {myLoans.length === 0 && <tr><td colSpan="4" className="p-20 text-center text-slate-300 italic font-medium">暂无未归还图书记录</td></tr>}
                             </tbody>
                         </table>
+                        {myLoans.length === 0 && <div className="p-20 text-center text-slate-300 italic font-medium">无待还图书</div>}
                     </div>
                 </div>
             );
         }
 
-        // --- 图书入库 ---
+        // --- 子组件: 图书入库 ---
         function InventoryView({ db, syncDb }) {
             const [form, setForm] = useState({ isbn: '', title: '', author: '', count: 1, location: '', callNumber: '', cover: '' });
             
             const handleImage = (e) => {
                 const file = e.target.files[0];
                 if (file) {
-                    if (file.size > 1024 * 1024) return alert("图片过大，请保持在 1MB 以内以提高同步效率");
+                    if (file.size > 800 * 1024) return alert("图片请压缩至 800KB 以内以获得最佳体验");
                     const reader = new FileReader();
                     reader.onloadend = () => setForm({ ...form, cover: reader.result });
                     reader.readAsDataURL(file);
@@ -374,63 +392,61 @@
             };
 
             const handleAdd = async () => {
-                if(!form.title || !form.isbn) return alert('请填写完整信息');
+                if(!form.title || !form.isbn) return alert('核心字段不能为空');
                 const newBook = { ...form, id: `B${Date.now()}`, stock: parseInt(form.count), available: parseInt(form.count) };
                 await syncDb({ ...db, books: [newBook, ...db.books] });
-                alert('云端入库成功！所有终端已同步。');
+                alert('数据已同步至全球云端节点');
                 setForm({ isbn: '', title: '', author: '', count: 1, location: '', callNumber: '', cover: '' });
             };
 
             return (
-                <div className="max-w-4xl bg-white p-12 rounded-[2.5rem] shadow-sm border border-slate-100 space-y-10 animate-in slide-in-from-bottom-4">
-                    <div className="flex justify-between items-center">
-                        <h2 className="text-3xl font-black text-slate-800 tracking-tight italic">New Arrival Entry</h2>
-                        <div className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100 uppercase tracking-widest">Digital Archive</div>
+                <div className="max-w-4xl bg-white p-12 rounded-[3rem] border border-slate-100 space-y-10 shadow-sm">
+                    <div className="flex items-center gap-4">
+                        <div className="w-2 h-8 bg-indigo-600 rounded-full"></div>
+                        <h2 className="text-3xl font-black text-slate-800 tracking-tight">文献入库系统</h2>
                     </div>
                     <div className="flex gap-12">
-                        <div className="w-40 h-56 bg-slate-50 border-4 border-dashed border-slate-100 rounded-[2rem] flex flex-col items-center justify-center overflow-hidden relative group cursor-pointer hover:border-indigo-200 hover:bg-white transition-all">
-                            {form.cover ? <img src={form.cover} className="w-full h-full object-cover" /> : <div className="text-center text-slate-300"><Icon name="image-plus" size={32} className="mx-auto" /><span className="text-[10px] font-black mt-3 block uppercase tracking-tighter">Upload Cover</span></div>}
+                        <div className="w-40 h-56 bg-slate-50 border-4 border-dashed border-slate-100 rounded-[2rem] flex items-center justify-center overflow-hidden relative hover:bg-white hover:border-indigo-200 transition-all cursor-pointer group">
+                            {form.cover ? <img src={form.cover} className="w-full h-full object-cover" /> : <div className="text-center text-slate-300"><Icon name="image-plus" size={32} className="mx-auto" /><span className="text-[9px] font-black mt-3 block uppercase">上传封面</span></div>}
                             <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleImage} />
                         </div>
                         <div className="flex-1 grid grid-cols-2 gap-6">
-                            <Input label="ISBN 条形码" value={form.isbn} onChange={v=>setForm({...form, isbn: v})} placeholder="978-..." />
+                            <Input label="ISBN 条码" value={form.isbn} onChange={v=>setForm({...form, isbn: v})} />
                             <Input label="入库复本量" type="number" value={form.count} onChange={v=>setForm({...form, count: v})} />
-                            <div className="col-span-2"><Input label="标准图书名称" value={form.title} onChange={v=>setForm({...form, title: v})} placeholder="请输入完整书名" /></div>
-                            <Input label="主要责任者/作者" value={form.author} onChange={v=>setForm({...form, author: v})} />
-                            <Input label="分类索书号" value={form.callNumber} onChange={v=>setForm({...form, callNumber: v})} placeholder="TP312.1" />
+                            <div className="col-span-2"><Input label="文献标准题名" value={form.title} onChange={v=>setForm({...form, title: v})} /></div>
+                            <Input label="责任者" value={form.author} onChange={v=>setForm({...form, author: v})} />
+                            <Input label="分类索书号" value={form.callNumber} onChange={v=>setForm({...form, callNumber: v})} />
                         </div>
                     </div>
-                    <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100">
-                        <Input label="馆藏架位分配" value={form.location} onChange={v=>setForm({...form, location: v})} placeholder="例如：主馆 3F A15" />
-                    </div>
-                    <button onClick={handleAdd} className="w-full py-6 bg-indigo-600 text-white rounded-2xl font-black text-lg shadow-2xl shadow-indigo-200 hover:bg-indigo-700 transition-all hover:-translate-y-1 active:scale-95">同步至云端馆藏库</button>
+                    <Input label="馆藏架位(层级)" value={form.location} onChange={v=>setForm({...form, location: v})} />
+                    <button onClick={handleAdd} className="w-full py-6 bg-indigo-600 text-white rounded-[1.5rem] font-black text-lg shadow-xl shadow-indigo-100 hover:bg-indigo-700 hover:-translate-y-1 active:scale-95 transition-all uppercase tracking-widest">Execute Cloud Entry</button>
                 </div>
             );
         }
 
-        // --- 读者管理 ---
+        // --- 子组件: 用户视图 ---
         function UsersView({ db }) {
             return (
-                <div className="bg-white rounded-[2rem] border border-slate-100 overflow-hidden shadow-sm">
+                <div className="bg-white rounded-[2rem] border border-slate-100 overflow-hidden">
                     <table className="w-full text-left">
-                        <thead className="bg-slate-50/50 border-b">
+                        <thead className="bg-slate-50 border-b">
                             <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                                <th className="px-10 py-5">读者姓名</th>
-                                <th className="px-10 py-5">学号/ID</th>
-                                <th className="px-10 py-5">角色等级</th>
-                                <th className="px-10 py-5">当前状态</th>
+                                <th className="px-10 py-5">读者</th>
+                                <th className="px-10 py-5">ID</th>
+                                <th className="px-10 py-5">权限组</th>
+                                <th className="px-10 py-5">状态</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50">
                             {db.users.map(u => (
-                                <tr key={u.id} className="hover:bg-slate-50/50 transition-colors">
-                                    <td className="px-10 py-6 font-black text-slate-700 flex items-center gap-3">
-                                        <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-black">{u.name[0]}</div>
+                                <tr key={u.id}>
+                                    <td className="px-10 py-6 font-bold flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center text-[10px] font-black">{u.name[0]}</div>
                                         {u.name}
                                     </td>
                                     <td className="px-10 py-6 font-mono text-xs text-slate-400">{u.id}</td>
-                                    <td className="px-10 py-6"><span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase ${u.role === 'READER' ? 'bg-slate-100 text-slate-500' : 'bg-amber-100 text-amber-600'}`}>{u.role}</span></td>
-                                    <td className="px-10 py-6"><span className="flex items-center gap-2 text-green-500 text-[10px] font-black uppercase"><div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>{u.status}</span></td>
+                                    <td className="px-10 py-6"><span className="px-2 py-1 bg-slate-100 text-[9px] font-black rounded uppercase">{u.role}</span></td>
+                                    <td className="px-10 py-6 text-green-500 font-bold text-[10px] uppercase">Active</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -439,11 +455,11 @@
             );
         }
 
-        function Input({ label, value, onChange, type="text", placeholder="" }) {
+        function Input({ label, value, onChange, type="text" }) {
             return (
                 <div className="space-y-1.5">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">{label}</label>
-                    <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-bold focus:bg-white focus:ring-4 ring-indigo-500/10 transition-all outline-none border-transparent focus:border-indigo-200" />
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{label}</label>
+                    <input type={type} value={value} onChange={e => onChange(e.target.value)} className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-bold focus:ring-4 ring-indigo-500/10 transition-all outline-none" />
                 </div>
             );
         }

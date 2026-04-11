@@ -297,8 +297,12 @@
                         {filteredBooks.map(book => (
                             <div key={book.id} className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-6 hover:shadow-md transition-shadow">
                                 {/* 左侧书籍图标/封面占位 */}
-                                <div className="w-24 h-32 bg-slate-100 rounded-xl flex items-center justify-center flex-shrink-0 border border-slate-200 text-slate-300">
-                                    <Icon name="book-open" size={40} />
+                                <div className="w-24 h-32 bg-slate-100 rounded-xl flex items-center justify-center flex-shrink-0 border border-slate-200 text-slate-300 overflow-hidden">
+                                    {book.cover ? (
+                                        <img src={book.cover} alt={book.title} className="w-full h-full object-cover" />
+                                    ) : (
+                                        <Icon name="book-open" size={40} />
+                                    )}
                                 </div>
                                 
                                 {/* 中间信息区 */}
@@ -437,27 +441,70 @@
 
         // --- 模块：图书入库 (保持管理员功能) ---
         function InventoryView({ db, syncDb }) {
-            const [form, setForm] = useState({ isbn: '', title: '', author: '', count: 1, location: '', callNumber: '' });
+            const [form, setForm] = useState({ isbn: '', title: '', author: '', count: 1, location: '', callNumber: '', cover: '' });
+            
+            // 处理本地图片上传并转为 Base64
+            const handleImageUpload = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    // 限制图片大小为 2MB 以内，防止 LocalStorage 撑爆
+                    if (file.size > 2 * 1024 * 1024) {
+                        alert('图片过大，请上传小于2MB的封面');
+                        return;
+                    }
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        setForm({ ...form, cover: reader.result });
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+
             const handleAdd = () => {
                 if(!form.isbn || !form.title) return alert('请填写核心信息');
                 const newBooks = [...db.books, { ...form, id: `B${Date.now()}`, stock: parseInt(form.count), available: parseInt(form.count) }];
                 syncDb({ ...db, books: newBooks });
                 alert('图书已成功入库并同步！');
-                setForm({ isbn: '', title: '', author: '', count: 1, location: '', callNumber: '' }); //清空
+                setForm({ isbn: '', title: '', author: '', count: 1, location: '', callNumber: '', cover: '' }); //清空
             };
             return (
                 <div className="max-w-3xl bg-white p-10 rounded-3xl shadow-sm border border-slate-200 space-y-8 animate-in fade-in duration-500">
                     <div>
                         <h2 className="text-2xl font-black text-slate-800">图书入库手续</h2>
-                        <p className="text-sm text-slate-400 mt-1">录入数字化信息，分配索书号及馆藏地</p>
+                        <p className="text-sm text-slate-400 mt-1">录入数字化信息，上传封面并分配索书号及馆藏地</p>
                     </div>
+
+                    <div className="flex gap-6 mb-6">
+                        {/* 封面上传区 */}
+                        <div className="w-32 h-44 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center overflow-hidden relative group hover:border-indigo-400 transition-colors flex-shrink-0 cursor-pointer">
+                            {form.cover ? (
+                                <img src={form.cover} className="w-full h-full object-cover" />
+                            ) : (
+                                <div className="text-center text-slate-400 p-2">
+                                    <Icon name="image-plus" size={24} className="mx-auto mb-2 opacity-50" />
+                                    <span className="text-[10px] font-bold">点击上传封面</span>
+                                </div>
+                            )}
+                            <input type="file" accept="image/*" onChange={handleImageUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
+                            {form.cover && (
+                                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                    <span className="text-white text-xs font-bold">更换封面</span>
+                                </div>
+                            )}
+                        </div>
+                        
+                        {/* 核心信息区 */}
+                        <div className="flex-1 grid grid-cols-2 gap-5">
+                            <Input label="ISBN 编码" value={form.isbn} onChange={v=>setForm({...form, isbn: v})} placeholder="扫描条码..." />
+                            <Input label="入库数量" type="number" value={form.count} onChange={v=>setForm({...form, count: v})} />
+                            <div className="col-span-2"><Input label="图书名称" value={form.title} onChange={v=>setForm({...form, title: v})} placeholder="请输入完整书名" /></div>
+                            <div className="col-span-2"><Input label="著者" value={form.author} onChange={v=>setForm({...form, author: v})} placeholder="原作者/编者" /></div>
+                        </div>
+                    </div>
+
                     <div className="grid grid-cols-2 gap-5">
-                        <Input label="ISBN 编码" value={form.isbn} onChange={v=>setForm({...form, isbn: v})} placeholder="扫描条码..." />
-                        <Input label="入库数量" type="number" value={form.count} onChange={v=>setForm({...form, count: v})} />
-                        <div className="col-span-2"><Input label="图书名称" value={form.title} onChange={v=>setForm({...form, title: v})} placeholder="请输入完整书名" /></div>
-                        <Input label="著者" value={form.author} onChange={v=>setForm({...form, author: v})} placeholder="原作者/编者" />
                         <Input label="索书号" value={form.callNumber} onChange={v=>setForm({...form, callNumber: v})} placeholder="例如: TP312.8/102" />
-                        <div className="col-span-2"><Input label="馆藏地点" value={form.location} onChange={v=>setForm({...form, location: v})} placeholder="例如: 主馆-计算机阅览区" /></div>
+                        <Input label="馆藏地点" value={form.location} onChange={v=>setForm({...form, location: v})} placeholder="例如: 主馆-计算机阅览区" />
                     </div>
                     <button onClick={handleAdd} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-sm shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95">确认提交入库流水</button>
                 </div>

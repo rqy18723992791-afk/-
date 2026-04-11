@@ -1,304 +1,382 @@
 <!DOCTYPE html>
-<html lang="zh-CN" translate="no">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="google" content="notranslate">
-    <title>智慧图书馆数字化管理平台</title>
-    <!-- 使用高度兼容的Tailwind CSS CDN -->
+    <title>智慧图书馆 - 数字化云端管理平台</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* 强制防止翻译引起的UI崩溃 */
-        .notranslate { translate: no !important; }
-        body { -webkit-tap-highlight-color: transparent; font-family: system-ui, -apple-system, sans-serif; }
+        /* 移动端适配与防抖动样式 */
+        body { -webkit-tap-highlight-color: transparent; font-family: system-ui, -apple-system, sans-serif; overflow-x: hidden; }
+        .tab-content { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
-        /* 隐藏滚动条但保留功能 */
-        ::-webkit-scrollbar { width: 0px; background: transparent; }
-
-        /* 移动端特殊样式 */
         @media (max-width: 768px) {
-            .sidebar {
-                position: fixed;
-                bottom: 0;
-                left: 0;
-                width: 100% !important;
-                height: 60px !important;
-                flex-direction: row !important;
-                padding: 0 !important;
-                z-index: 1000;
-                border-top: 1px solid rgba(255,255,255,0.1);
-            }
-            .sidebar-header { display: none; }
-            .nav-container { display: flex; width: 100%; justify-content: space-around; align-items: center; }
-            .nav-item { margin-bottom: 0 !important; font-size: 12px; padding: 10px !important; flex: 1; text-align: center; }
-            .content { padding: 20px 20px 80px 20px !important; }
-            .user-profile { display: none !important; }
-            .login-card { margin: 20px; border-radius: 16px; }
+            .mobile-nav { position: fixed; bottom: 0; left: 0; right: 0; background: white; display: flex; border-top: 1px solid #e2e8f0; z-index: 50; }
+            .mobile-nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 10px 0; font-size: 10px; color: #64748b; }
+            .mobile-nav-item.active { color: #4f46e5; }
+            .main-content { padding-bottom: 80px !important; }
+            .sidebar { display: none; }
         }
+        
+        .book-card img { transition: transform 0.3s; }
+        .book-card:hover img { transform: scale(1.05); }
     </style>
 </head>
-<body class="bg-slate-50 text-slate-900 overflow-hidden">
+<body class="bg-slate-50">
 
-    <!-- 登录视图 -->
-    <div id="login-screen" class="h-screen w-full flex items-center justify-center bg-gradient-to-br from-indigo-600 to-purple-700">
-        <div class="login-card bg-white p-8 md:p-10 shadow-2xl w-full max-w-md text-center">
-            <div class="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                <div class="w-8 h-8 bg-indigo-600 rounded-lg"></div>
+    <!-- 登录注册模块 -->
+    <div id="auth-screen" class="min-h-screen flex items-center justify-center bg-indigo-600 p-4">
+        <div class="bg-white w-full max-w-md rounded-3xl shadow-2xl p-8">
+            <div class="text-center mb-8">
+                <div class="inline-block p-4 bg-indigo-100 rounded-2xl mb-4">
+                    <svg class="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+                </div>
+                <h1 class="text-2xl font-bold text-slate-800" id="auth-title">欢迎回来</h1>
+                <p class="text-slate-400 mt-2" id="auth-subtitle">请输入您的账号访问图书馆</p>
             </div>
-            <h2 class="text-2xl font-bold text-slate-800 mb-2">智慧图书馆</h2>
-            <p class="text-slate-400 text-sm mb-8">数字化管理系统 V3.0</p>
-            
-            <div class="space-y-4 text-left">
+
+            <div class="space-y-4">
                 <div>
-                    <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">管理账号</label>
-                    <input type="text" id="login-acc" value="18723992791" class="w-full p-4 bg-slate-50 rounded-xl border-2 border-transparent focus:border-indigo-500 outline-none transition-all">
+                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">手机账号</label>
+                    <input type="text" id="auth-acc" value="18723992791" class="w-full p-4 bg-slate-50 rounded-xl border-2 border-transparent focus:border-indigo-500 outline-none transition-all">
                 </div>
                 <div>
-                    <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">访问密码</label>
-                    <input type="password" id="login-pw" value="rqy18723992791" class="w-full p-4 bg-slate-50 rounded-xl border-2 border-transparent focus:border-indigo-500 outline-none transition-all">
+                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">访问密码</label>
+                    <input type="password" id="auth-pw" value="rqy18723992791" class="w-full p-4 bg-slate-50 rounded-xl border-2 border-transparent focus:border-indigo-500 outline-none transition-all">
+                </div>
+                <button onclick="handleAuth()" id="auth-btn" class="w-full py-4 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-100 active:scale-95 transition-all">登录系统</button>
+                <div class="text-center">
+                    <button onclick="toggleAuthMode()" id="auth-switch" class="text-sm text-indigo-600 font-medium">还没有账号？立即注册</button>
                 </div>
             </div>
-            
-            <button onclick="handleLogin()" class="w-full mt-8 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95">
-                进入系统
-            </button>
-            <p id="login-msg" class="text-red-500 text-xs mt-4 h-4"></p>
+            <p id="auth-msg" class="text-center text-rose-500 text-sm mt-4"></p>
         </div>
     </div>
 
-    <!-- 主程序视图 -->
-    <div id="main-screen" class="hidden h-screen flex flex-col md:flex-row">
-        <!-- 侧边栏/移动端底栏 -->
-        <div class="sidebar w-64 bg-slate-900 text-white flex flex-col p-6">
-            <div class="sidebar-header flex items-center gap-3 mb-10">
+    <!-- 主界面模块 -->
+    <div id="app-screen" class="hidden min-h-screen flex flex-col md:flex-row">
+        <!-- 侧边栏 (桌面端) -->
+        <aside class="sidebar w-64 bg-slate-900 text-white p-6 flex flex-col shrink-0">
+            <div class="flex items-center gap-3 mb-12">
                 <div class="w-8 h-8 bg-indigo-500 rounded-lg"></div>
-                <span class="font-black tracking-tight text-xl">DIGITAL LIB</span>
+                <span class="font-black text-xl tracking-tighter">CLOUD LIB</span>
             </div>
-            
-            <nav class="nav-container space-y-2">
-                <div id="nav-catalog" onclick="switchTab('catalog')" class="nav-item p-4 rounded-xl cursor-pointer hover:bg-white/10 transition-all font-bold active bg-indigo-600">馆藏检索</div>
-                <div id="admin-menu" class="hidden space-y-2">
-                    <div id="nav-inventory" onclick="switchTab('inventory')" class="nav-item p-4 rounded-xl cursor-pointer hover:bg-white/10 transition-all font-bold">图书入库</div>
-                </div>
-                <div id="nav-loans" onclick="switchTab('loans')" class="nav-item p-4 rounded-xl cursor-pointer hover:bg-white/10 transition-all font-bold">我的借阅</div>
+            <nav class="space-y-2 flex-1">
+                <button onclick="switchTab('catalog')" id="nav-catalog" class="w-full text-left p-4 rounded-xl font-bold transition-all bg-indigo-600">馆藏中心</button>
+                <button onclick="switchTab('admin')" id="nav-admin" class="w-full text-left p-4 rounded-xl font-bold transition-all hidden">图书管理</button>
+                <button onclick="switchTab('profile')" id="nav-profile" class="w-full text-left p-4 rounded-xl font-bold transition-all">借阅历史</button>
             </nav>
-
-            <div class="user-profile mt-auto pt-6 border-t border-white/10">
-                <div id="user-display-name" class="font-bold text-sm">加载中...</div>
-                <div id="user-display-role" class="text-[10px] text-slate-500 mb-4 uppercase font-black">USER</div>
-                <button onclick="handleLogout()" class="text-rose-400 text-xs font-bold hover:text-rose-300">安全退出系统</button>
+            <div class="mt-auto border-t border-white/10 pt-6">
+                <p id="user-name" class="font-bold">加载中...</p>
+                <button onclick="logout()" class="text-xs text-rose-400 mt-2 font-bold">退出登录</button>
             </div>
-        </div>
+        </aside>
 
-        <!-- 内容区 -->
-        <main class="content flex-1 bg-slate-50 overflow-y-auto p-6 md:p-12">
-            <!-- 馆藏检索 -->
+        <!-- 内容区域 -->
+        <main class="main-content flex-1 overflow-y-auto p-4 md:p-10">
+            <!-- 馆藏中心 -->
             <section id="tab-catalog" class="tab-content">
-                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
-                    <h1 class="text-3xl font-black text-slate-800">全部馆藏</h1>
-                    <div class="relative">
-                        <input type="text" id="search-box" oninput="renderCatalog()" placeholder="搜索书名、作者..." class="w-full md:w-80 p-4 bg-white shadow-sm rounded-2xl border-none outline-none focus:ring-2 ring-indigo-500/20 font-medium">
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
+                    <div>
+                        <h2 class="text-3xl font-black text-slate-800">馆藏目录</h2>
+                        <p class="text-slate-400 text-sm">探索您感兴趣的知识</p>
+                    </div>
+                    <div class="w-full md:w-72">
+                        <input type="text" id="search-input" oninput="renderBooks()" placeholder="搜索书名/作者..." class="w-full p-4 bg-white rounded-2xl shadow-sm border-none focus:ring-2 ring-indigo-500/20">
                     </div>
                 </div>
-                <div id="book-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                    <!-- 书籍卡片动态插入 -->
-                </div>
-            </section>
-
-            <!-- 图书入库 -->
-            <section id="tab-inventory" class="tab-content hidden">
-                <h1 class="text-3xl font-black text-slate-800 mb-8">新书入库</h1>
-                <div class="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 max-w-xl">
-                    <div class="space-y-4">
-                        <div><label class="text-[10px] font-bold text-slate-400 uppercase ml-1">书名</label><input type="text" id="add-title" class="w-full p-4 bg-slate-50 rounded-xl outline-none border-2 border-transparent focus:border-indigo-500"></div>
-                        <div><label class="text-[10px] font-bold text-slate-400 uppercase ml-1">作者</label><input type="text" id="add-author" class="w-full p-4 bg-slate-50 rounded-xl outline-none border-2 border-transparent focus:border-indigo-500"></div>
-                        <div><label class="text-[10px] font-bold text-slate-400 uppercase ml-1">初始库存</label><input type="number" id="add-stock" value="1" class="w-full p-4 bg-slate-50 rounded-xl outline-none border-2 border-transparent focus:border-indigo-500"></div>
-                        <button onclick="addBook()" class="w-full py-4 bg-slate-900 text-white font-bold rounded-xl mt-4">确认入库</button>
-                    </div>
+                <div id="book-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-8">
+                    <!-- 书籍动态加载 -->
                 </div>
             </section>
 
-            <!-- 我的借阅 -->
-            <section id="tab-loans" class="tab-content hidden">
-                <h1 class="text-3xl font-black text-slate-800 mb-8">我的借阅</h1>
-                <div class="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left">
-                            <thead class="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
-                                <tr><th class="p-6">图书详情</th><th class="p-6">借阅时间</th><th class="p-6">状态</th></tr>
-                            </thead>
-                            <tbody id="loan-body" class="divide-y divide-slate-50">
-                                <!-- 借阅记录动态插入 -->
-                            </tbody>
-                        </table>
+            <!-- 图书管理 -->
+            <section id="tab-admin" class="tab-content hidden">
+                <h2 class="text-3xl font-black text-slate-800 mb-8">图书入库</h2>
+                <div class="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 max-w-2xl">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="space-y-4">
+                            <div><label class="text-xs font-bold text-slate-400 uppercase">书名</label><input type="text" id="in-title" class="w-full p-4 bg-slate-50 rounded-xl outline-none border-2 border-transparent focus:border-indigo-500"></div>
+                            <div><label class="text-xs font-bold text-slate-400 uppercase">作者</label><input type="text" id="in-author" class="w-full p-4 bg-slate-50 rounded-xl outline-none border-2 border-transparent focus:border-indigo-500"></div>
+                            <div><label class="text-xs font-bold text-slate-400 uppercase">库存数量</label><input type="number" id="in-stock" value="1" class="w-full p-4 bg-slate-50 rounded-xl outline-none border-2 border-transparent focus:border-indigo-500"></div>
+                        </div>
+                        <div class="space-y-4">
+                            <label class="text-xs font-bold text-slate-400 uppercase">图书封面</label>
+                            <div id="image-preview" onclick="document.getElementById('in-file').click()" class="aspect-[3/4] bg-slate-50 rounded-xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer overflow-hidden relative">
+                                <span class="text-slate-400 text-xs font-bold">点击选择照片</span>
+                                <input type="file" id="in-file" accept="image/*" class="hidden" onchange="previewImage(this)">
+                            </div>
+                        </div>
                     </div>
-                    <div id="no-loans" class="p-20 text-center text-slate-300 font-bold hidden">暂无借阅记录</div>
+                    <button onclick="handleUpload()" class="w-full py-4 bg-slate-900 text-white font-bold rounded-xl mt-8">发布图书到云端</button>
+                </div>
+            </section>
+
+            <!-- 个人中心 (借阅历史) -->
+            <section id="tab-profile" class="tab-content hidden">
+                <h2 class="text-3xl font-black text-slate-800 mb-8">借阅历史</h2>
+                <div id="loan-list" class="space-y-4">
+                    <!-- 借阅记录动态加载 -->
                 </div>
             </section>
         </main>
+
+        <!-- 移动端导航 (Mobile Only) -->
+        <nav class="mobile-nav">
+            <div onclick="switchTab('catalog')" class="mobile-nav-item active" id="m-nav-catalog">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                <span>馆藏</span>
+            </div>
+            <div onclick="switchTab('admin')" class="mobile-nav-item hidden" id="m-nav-admin">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4"></path></svg>
+                <span>管理</span>
+            </div>
+            <div onclick="switchTab('profile')" class="mobile-nav-item" id="m-nav-profile">
+                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
+                <span>我的</span>
+            </div>
+        </nav>
     </div>
 
-    <script>
-        // 系统状态与初始数据
-        let state = {
-            user: null,
-            books: [
-                { id: 1, title: '深入理解计算机系统', author: 'R.E.B', isbn: '9787111', stock: 10, available: 8 },
-                { id: 2, title: 'JavaScript 高级程序设计', author: 'Nicholas', isbn: '9787115', stock: 5, available: 5 },
-                { id: 3, title: '算法导论', author: 'Cormen', isbn: '97871114', stock: 3, available: 1 }
-            ],
-            loans: [],
-            users: [
-                { account: '18723992791', password: 'rqy18723992791', name: '系统管理员', role: 'ADMIN' }
-            ]
+    <!-- 弹窗组件 -->
+    <div id="toast" class="fixed top-10 left-1/2 -translate-x-1/2 px-6 py-3 bg-slate-900 text-white rounded-full text-sm font-bold shadow-xl opacity-0 transition-all pointer-events-none z-[100]"></div>
+
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, query, onSnapshot, updateDoc, arrayUnion } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // 1. 初始化配置 (由环境提供)
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        // 2. 本地全局状态
+        let currentUser = null;
+        let isRegisterMode = false;
+        let booksData = [];
+        let uploadImageData = null;
+
+        // 3. 核心身份验证逻辑
+        window.handleAuth = async () => {
+            const acc = document.getElementById('auth-acc').value;
+            const pw = document.getElementById('auth-pw').value;
+            if (!acc || !pw) return showToast("请填写完整信息");
+
+            try {
+                // 首先我们需要一个底层的Firebase Auth会话
+                if (!auth.currentUser) {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                }
+
+                const userDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', acc);
+                const userSnap = await getDoc(userDocRef);
+
+                if (isRegisterMode) {
+                    if (userSnap.exists()) return showToast("账号已存在");
+                    const newUser = { account: acc, password: pw, name: '用户' + acc.slice(-4), role: 'READER', joined: Date.now() };
+                    await setDoc(userDocRef, newUser);
+                    showToast("注册成功！自动登录...");
+                    loginSuccess(newUser);
+                } else {
+                    if (!userSnap.exists() || userSnap.data().password !== pw) return showToast("账号或密码错误");
+                    loginSuccess(userSnap.data());
+                }
+            } catch (err) {
+                console.error(err);
+                showToast("连接失败，请检查网络");
+            }
         };
 
-        // 数据持久化
-        const DB_KEY = 'LIB_V3_STORAGE';
-        function save() { localStorage.setItem(DB_KEY, JSON.stringify(state)); }
-        function load() {
-            const data = localStorage.getItem(DB_KEY);
-            if (data) state = JSON.parse(data);
-            const session = localStorage.getItem('LIB_SESSION');
-            if (session) {
-                state.user = JSON.parse(session);
-                showApp();
+        function loginSuccess(userData) {
+            currentUser = userData;
+            localStorage.setItem('LOGGED_USER', JSON.stringify(userData));
+            document.getElementById('auth-screen').style.display = 'none';
+            document.getElementById('app-screen').classList.remove('hidden');
+            document.getElementById('user-name').innerText = userData.name;
+            
+            if (userData.role === 'ADMIN' || userData.account === '18723992791') {
+                document.getElementById('nav-admin').classList.remove('hidden');
+                document.getElementById('m-nav-admin').classList.remove('hidden');
             }
+            initDataListeners();
         }
 
-        // 登录
-        function handleLogin() {
-            const acc = document.getElementById('login-acc').value;
-            const pw = document.getElementById('login-pw').value;
-            const msg = document.getElementById('login-msg');
-
-            const found = state.users.find(u => u.account === acc && u.password === pw);
-            if (found) {
-                state.user = found;
-                localStorage.setItem('LIB_SESSION', JSON.stringify(found));
-                showApp();
-            } else {
-                msg.innerText = "账号或密码错误";
-            }
-        }
-
-        function handleLogout() {
-            localStorage.removeItem('LIB_SESSION');
+        window.logout = () => {
+            localStorage.removeItem('LOGGED_USER');
             location.reload();
+        };
+
+        // 4. 云端数据监听 (保证多端同步)
+        function initDataListeners() {
+            // 监听图书
+            const qBooks = collection(db, 'artifacts', appId, 'public', 'data', 'books');
+            onSnapshot(qBooks, (snapshot) => {
+                booksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderBooks();
+            }, (err) => console.error("Books error:", err));
+
+            // 监听个人借阅
+            const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', currentUser.account);
+            onSnapshot(userRef, (snapshot) => {
+                if (snapshot.exists()) {
+                    const data = snapshot.data();
+                    renderLoans(data.loans || []);
+                }
+            }, (err) => console.error("User sync error:", err));
         }
 
-        // 导航切换
-        function switchTab(tabId) {
-            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
-            document.getElementById('tab-' + tabId).classList.remove('hidden');
-            
-            document.querySelectorAll('.nav-item').forEach(el => {
-                el.classList.remove('bg-indigo-600', 'active');
-            });
-            document.getElementById('nav-' + tabId).classList.add('bg-indigo-600', 'active');
+        // 5. 业务功能：图书入库 (含图片)
+        window.previewImage = (input) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                uploadImageData = e.target.result;
+                const preview = document.getElementById('image-preview');
+                preview.innerHTML = `<img src="${uploadImageData}" class="w-full h-full object-cover">`;
+            };
+            if (input.files[0]) reader.readAsDataURL(input.files[0]);
+        };
 
-            if (tabId === 'catalog') renderCatalog();
-            if (tabId === 'loans') renderLoans();
-        }
+        window.handleUpload = async () => {
+            const title = document.getElementById('in-title').value;
+            const author = document.getElementById('in-author').value;
+            const stock = parseInt(document.getElementById('in-stock').value);
 
-        function showApp() {
-            document.getElementById('login-screen').style.display = 'none';
-            document.getElementById('main-screen').classList.remove('hidden');
-            document.getElementById('user-display-name').innerText = state.user.name;
-            document.getElementById('user-display-role').innerText = state.user.role === 'ADMIN' ? 'Administrator' : 'Reader';
-            
-            if (state.user.role === 'ADMIN') {
-                document.getElementById('admin-menu').classList.remove('hidden');
+            if (!title || !uploadImageData) return showToast("请填写书名并上传照片");
+
+            try {
+                const bookId = "book_" + Date.now();
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'books', bookId), {
+                    title, author, stock, available: stock, image: uploadImageData, createdAt: Date.now()
+                });
+                showToast("云端入库成功！");
+                switchTab('catalog');
+                // 清空表单
+                document.getElementById('in-title').value = '';
+                document.getElementById('in-author').value = '';
+                document.getElementById('image-preview').innerHTML = '<span class="text-slate-400 text-xs font-bold">点击选择照片</span>';
+                uploadImageData = null;
+            } catch (err) {
+                showToast("入库失败");
             }
-            renderCatalog();
-        }
+        };
 
-        // 业务：渲染书籍卡片
-        function renderCatalog() {
+        // 6. 业务功能：借阅逻辑
+        window.borrowBook = async (bookId) => {
+            const book = booksData.find(b => b.id === bookId);
+            if (!book || book.available <= 0) return showToast("库存不足");
+
+            try {
+                // 1. 更新图书库存
+                const bookRef = doc(db, 'artifacts', appId, 'public', 'data', 'books', bookId);
+                await updateDoc(bookRef, { available: book.available - 1 });
+
+                // 2. 更新用户借阅历史
+                const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', currentUser.account);
+                await updateDoc(userRef, {
+                    loans: arrayUnion({
+                        bookId,
+                        title: book.title,
+                        date: new Date().toLocaleDateString(),
+                        status: '借阅中'
+                    })
+                });
+                showToast(`《${book.title}》借阅成功`);
+            } catch (err) {
+                showToast("借阅操作失败");
+            }
+        };
+
+        // 7. UI 渲染逻辑
+        window.renderBooks = () => {
             const grid = document.getElementById('book-grid');
-            const kw = document.getElementById('search-box').value.toLowerCase();
+            const kw = document.getElementById('search-input').value.toLowerCase();
             grid.innerHTML = '';
 
-            state.books.filter(b => b.title.toLowerCase().includes(kw)).forEach(book => {
-                const card = document.createElement('div');
-                card.className = "bg-white p-6 rounded-3xl shadow-sm border border-slate-100 hover:shadow-xl hover:shadow-indigo-500/5 transition-all group";
-                card.innerHTML = `
-                    <div class="h-40 bg-slate-50 rounded-2xl mb-4 flex items-center justify-center group-hover:bg-indigo-50 transition-colors">
-                        <div class="w-12 h-16 bg-white shadow-sm border border-slate-100 rounded flex flex-col p-2 gap-1">
-                            <div class="h-1 w-full bg-slate-100"></div>
-                            <div class="h-1 w-2/3 bg-slate-100"></div>
+            const filtered = booksData.filter(b => b.title.toLowerCase().includes(kw) || b.author.toLowerCase().includes(kw));
+
+            filtered.forEach(book => {
+                const div = document.createElement('div');
+                div.className = "book-card bg-white rounded-2xl md:rounded-3xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-slate-100";
+                div.innerHTML = `
+                    <div class="aspect-[3/4] bg-slate-100 relative">
+                        <img src="${book.image}" class="w-full h-full object-cover">
+                        <div class="absolute top-2 right-2 px-2 py-1 bg-black/50 backdrop-blur-md text-[10px] text-white rounded-lg font-bold">
+                            余 ${book.available}
                         </div>
                     </div>
-                    <h3 class="font-bold text-slate-800 mb-1 truncate">${book.title}</h3>
-                    <p class="text-xs text-slate-400 mb-4">${book.author}</p>
-                    <div class="flex items-center justify-between">
-                        <span class="px-3 py-1 bg-green-50 text-green-600 text-[10px] font-black rounded-full">
-                            余 ${book.available}
-                        </span>
-                        <button onclick="borrowBook(${book.id})" class="text-xs font-bold text-indigo-600 hover:text-indigo-800">立即借阅 →</button>
+                    <div class="p-3 md:p-5">
+                        <h3 class="font-bold text-slate-800 text-sm md:text-base truncate">${book.title}</h3>
+                        <p class="text-[10px] md:text-xs text-slate-400 mt-1">${book.author}</p>
+                        <button onclick="borrowBook('${book.id}')" class="w-full mt-3 py-2 md:py-3 bg-indigo-50 text-indigo-600 text-[10px] md:text-xs font-black rounded-xl hover:bg-indigo-600 hover:text-white transition-all">
+                            立即借阅
+                        </button>
                     </div>
                 `;
-                grid.appendChild(card);
+                grid.appendChild(div);
             });
-        }
+        };
 
-        // 业务：借书
-        function borrowBook(id) {
-            const book = state.books.find(b => b.id === id);
-            if (book.available <= 0) return alert('库存不足');
+        window.renderLoans = (loans) => {
+            const list = document.getElementById('loan-list');
+            list.innerHTML = loans.length ? '' : '<div class="p-20 text-center text-slate-300 font-bold">暂无借阅记录</div>';
             
-            book.available--;
-            state.loans.unshift({
-                id: Date.now(),
-                title: book.title,
-                date: new Date().toLocaleDateString(),
-                status: '借阅中'
+            [...loans].reverse().forEach(loan => {
+                const item = document.createElement('div');
+                item.className = "bg-white p-5 rounded-2xl flex items-center justify-between shadow-sm border border-slate-100";
+                item.innerHTML = `
+                    <div>
+                        <h4 class="font-bold text-slate-800">${loan.title}</h4>
+                        <p class="text-xs text-slate-400 mt-1">借阅日期: ${loan.date}</p>
+                    </div>
+                    <span class="px-3 py-1 bg-green-50 text-green-600 text-[10px] font-black rounded-full uppercase">${loan.status}</span>
+                `;
+                list.appendChild(item);
             });
-            save();
-            alert(`《${book.title}》借阅成功！`);
-            renderCatalog();
-        }
+        };
 
-        // 业务：入库
-        function addBook() {
-            const t = document.getElementById('add-title').value;
-            const a = document.getElementById('add-author').value;
-            const s = parseInt(document.getElementById('add-stock').value);
-
-            if (!t) return alert('请填写书名');
+        // 8. 辅助函数
+        window.switchTab = (tabId) => {
+            document.querySelectorAll('.tab-content').forEach(s => s.classList.add('hidden'));
+            document.getElementById('tab-' + tabId).classList.remove('hidden');
             
-            state.books.unshift({ id: Date.now(), title: t, author: a, stock: s, available: s });
-            save();
-            alert('新书入库成功！');
-            switchTab('catalog');
-            document.getElementById('add-title').value = '';
-        }
-
-        // 业务：借阅记录
-        function renderLoans() {
-            const body = document.getElementById('loan-body');
-            const empty = document.getElementById('no-loans');
-            body.innerHTML = '';
+            // 更新导航高亮 (桌面)
+            document.querySelectorAll('.sidebar button').forEach(b => b.classList.remove('bg-indigo-600'));
+            document.getElementById('nav-' + tabId)?.classList.add('bg-indigo-600');
             
-            if (state.loans.length === 0) {
-                empty.classList.remove('hidden');
-            } else {
-                empty.classList.add('hidden');
-                state.loans.forEach(l => {
-                    const tr = document.createElement('tr');
-                    tr.className = "text-sm";
-                    tr.innerHTML = `
-                        <td class="p-6 font-bold text-slate-700">${l.title}</td>
-                        <td class="p-6 text-slate-400 text-xs">${l.date}</td>
-                        <td class="p-6"><span class="text-green-500 font-black text-[10px] uppercase">${l.status}</span></td>
-                    `;
-                    body.appendChild(tr);
-                });
-            }
-        }
+            // 更新导航高亮 (移动)
+            document.querySelectorAll('.mobile-nav-item').forEach(i => i.classList.remove('active'));
+            document.getElementById('m-nav-' + tabId)?.classList.add('active');
+        };
 
-        // 初始化
-        window.onload = load;
+        window.toggleAuthMode = () => {
+            isRegisterMode = !isRegisterMode;
+            document.getElementById('auth-title').innerText = isRegisterMode ? "新用户注册" : "欢迎回来";
+            document.getElementById('auth-subtitle').innerText = isRegisterMode ? "创建一个云端图书馆账号" : "请输入您的账号访问图书馆";
+            document.getElementById('auth-btn').innerText = isRegisterMode ? "立即注册" : "登录系统";
+            document.getElementById('auth-switch').innerText = isRegisterMode ? "已有账号？去登录" : "还没有账号？立即注册";
+        };
+
+        window.showToast = (msg) => {
+            const t = document.getElementById('toast');
+            t.innerText = msg;
+            t.classList.remove('opacity-0', '-translate-y-5');
+            setTimeout(() => t.classList.add('opacity-0', '-translate-y-5'), 2000);
+        };
+
+        // 9. 启动检查
+        const cached = localStorage.getItem('LOGGED_USER');
+        if (cached) {
+            loginSuccess(JSON.parse(cached));
+        }
     </script>
 </body>
 </html>

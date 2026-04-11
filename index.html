@@ -4,14 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>THU-Style 数字化图书管理平台</title>
-    <!-- 核心依赖 -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    
     <style>
-        body { font-family: 'Inter', 'PingFang SC', sans-serif; }
+       body { font-family: 'Inter', 'PingFang SC', sans-serif; }
         .thu-purple { background: linear-gradient(135deg, #6b21a8 0%, #4338ca 100%); }
         .glass { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
         .book-card:hover { transform: translateY(-8px); box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1); }
@@ -22,66 +23,83 @@
 <body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
 
-    <script type="text/babel">
+
+   <script type="text/babel">  
+      
+        // 2. 填写你的 Supabase 连接信息
+                // 2. 填写你的 Supabase 连接信息
+        const SUPABASE_URL = 'https://fdqxbxoxfmsrdjoahesl.supabase.co'; 
+        const SUPABASE_KEY = 'sb_publishable_ucWDth0derKEyvKUZyOHLg_Sic_B5EJ';   // ←←← 只保留这一串，不要加任何其他文字
+        const supabase = (window.supabasejs || window.supabase).createClient(SUPABASE_URL, SUPABASE_KEY);
+        
         const { useState, useEffect } = React;
 
-        // 图标组件
+        // 3. 图标组件定义
         const Icon = ({ name, size = 18, className = "" }) => {
-            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
+            useEffect(() => { 
+                if (window.lucide) window.lucide.createIcons(); 
+            }, [name]);
             return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         };
 
         const DB_KEY = "THU_LIB_V3";
         const DRAFT_KEY = "ADD_BOOK_DRAFT";
 
-        // 初始数据（管理员账号已内置）
+        // 4. 初始数据（这里保持不变）
         const INITIAL_DB = {
             users: [
                 { id: '18723992791', account: '18723992791', password: 'rqy18723992791', role: 'ADMIN', name: '系统管理员' }
             ],
-            books: [
-                { id: 'B1', isbn: '9787302423287', title: '深度学习入门', author: '斋藤康毅', category: '人工智能', total: 10, available: 8, location: '理科馆 3F', cover: 'https://img3.doubanio.com/view/subject/l/public/s29822180.jpg' },
-                { id: 'B2', isbn: '9787121362392', title: '计算机网络核心技术', author: '谢希仁', category: '网络', total: 5, available: 2, location: '文科馆 2F', cover: 'https://img2.doubanio.com/view/subject/l/public/s29505500.jpg' }
-            ],
+            books: [], // 书籍将从云端获取
             borrowings: []
         };
 
         function App() {
-            const [user, setUser] = useState(() => {
-                const saved = localStorage.getItem("USER_SESSION");
-                return saved ? JSON.parse(saved) : null;
-            });
-            const [db, setDb] = useState(() => {
-                const saved = localStorage.getItem(DB_KEY);
-                return saved ? JSON.parse(saved) : INITIAL_DB;
-            });
+    const [user, setUser] = useState(() => {
+        const saved = localStorage.getItem("USER_SESSION");
+        return saved ? JSON.parse(saved) : null;
+    });
 
-            useEffect(() => {
-                localStorage.setItem(DB_KEY, JSON.stringify(db));
-            }, [db]);
+    const [db, setDb] = useState({ ...INITIAL_DB, books: [] });
 
-            const login = (u) => {
-                setUser(u);
-                localStorage.setItem("USER_SESSION", JSON.stringify(u));
-            };
+    useEffect(() => {
+        const fetchBooks = async () => {
+            const { data, error } = await supabase.from('books').select('*').order('created_at', { ascending: false });
+            if (!error && data) {
+                setDb(prev => ({ ...prev, books: data }));
+            }
+        };
 
-            const logout = () => {
-                setUser(null);
-                localStorage.removeItem("USER_SESSION");
-            };
+        fetchBooks();
 
-            return (
-                <div className="min-h-screen">
-                    {user ? (
-                        <Dashboard user={user} db={db} setDb={setDb} onLogout={logout} />
-                    ) : (
-                        <LoginPage onLogin={login} db={db} />
-                    )}
-                </div>
-            );
-        }
+        const channel = supabase.channel('books_realtime')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'books' }, 
+                () => { fetchBooks(); })
+            .subscribe();
 
-        // ==================== 以下所有组件完整定义 ====================
+        return () => { supabase.removeChannel(channel); };
+    }, []);
+
+    const login = (u) => {
+        setUser(u);
+        localStorage.setItem("USER_SESSION", JSON.stringify(u));
+    };
+
+    const logout = () => {
+        setUser(null);
+        localStorage.removeItem("USER_SESSION");
+    };
+
+    return (
+        <div className="min-h-screen">
+            {user ? (
+                <Dashboard user={user} db={db} setDb={setDb} onLogout={logout} />
+            ) : (
+                <LoginPage onLogin={login} db={db} />
+            )}
+        </div>
+    );
+}
 
         function LoginPage({ onLogin, db }) {
             const [acc, setAcc] = useState('');
@@ -177,7 +195,6 @@
             );
         }
 
-        // 读者首页
         function ReaderHome({ db, setView }) {
             return (
                 <div className="animate-in">
@@ -210,7 +227,6 @@
             );
         }
 
-        // 图书检索
         function SearchView({ books, onBorrow, search, setSearch }) {
             return (
                 <div className="animate-in">
@@ -240,7 +256,6 @@
             );
         }
 
-        // 我的借阅
         function MyBorrowings({ borrowings, userId }) {
             const mine = borrowings.filter(b => b.userId === userId);
             return (
@@ -273,7 +288,6 @@
             );
         }
 
-        // 管理员首页
         function AdminHome({ db }) {
             const stats = [
                 { label: '在馆书本', val: db.books.reduce((a, b) => a + b.total, 0), icon: 'book' },
@@ -319,7 +333,6 @@
             );
         }
 
-        // 新书入库（已实现表单+图片本地持久化）
         function AddBook({ db, setDb }) {
             const [f, setF] = useState(() => {
                 const savedDraft = localStorage.getItem(DRAFT_KEY);
@@ -338,11 +351,11 @@
                 reader.readAsDataURL(file);
             };
 
-            const submit = (e) => {
+            const submit = async (e) => {
                 e.preventDefault();
                 if (!f.title || !f.isbn) return alert("书名和 ISBN 不能为空");
+                
                 const newBook = {
-                    id: 'B' + Date.now(),
                     isbn: f.isbn,
                     title: f.title,
                     author: f.author || '未知',
@@ -352,10 +365,16 @@
                     location: f.location || '暂无架位',
                     cover: f.cover || 'https://via.placeholder.com/300x400?text=No+Cover'
                 };
-                setDb({ ...db, books: [newBook, ...db.books] });
-                alert("✅ 录入成功！数据已保存");
-                localStorage.removeItem(DRAFT_KEY);
-                setF({ title: '', isbn: '', author: '', category: '通用', total: 5, cover: '', location: '' });
+
+                const { error } = await supabase.from('books').insert([newBook]);
+
+                if (error) {
+                    alert("云端入库失败：" + error.message);
+                } else {
+                    alert("✅ 云端实时同步成功！");
+                    localStorage.removeItem(DRAFT_KEY);
+                    setF({ title: '', isbn: '', author: '', category: '通用', total: 5, cover: '', location: '' });
+                }
             };
 
             return (
@@ -389,7 +408,6 @@
             );
         }
 
-        // 辅助组件
         const NavBtn = ({ icon, label, active, onClick }) => (
             <button onClick={onClick} className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl font-bold transition-all ${active ? 'bg-purple-600 text-white shadow-lg shadow-purple-100 translate-x-1' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-800'}`}>
                 <Icon name={icon} size={20} />
@@ -404,7 +422,6 @@
             </div>
         );
 
-        // 启动 React
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>

@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>学院图书数字化管理平台 - 智慧图书馆</title>
+    <title>智慧图书馆 - 增强兼容版</title>
+    <!-- 基础依赖库 -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -12,315 +13,285 @@
     <style>
         body { font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif; }
         .academic-bg { background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); }
-        /* 防止页面加载前的闪烁 */
-        [v-cloak] { display: none; }
+        .loading-ring { border: 4px solid #e2e8f0; border-top: 4px solid #4f46e5; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body class="bg-slate-50">
     <div id="root"></div>
 
     <script type="module">
-        // 显式导入 Firebase 模块，确保电脑端加载链路完整
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // 尝试导入 Firebase，如果失败则走本地模式
+        let firebaseApp, auth, db_fs, initialized = false;
 
-        const { useState, useEffect, useCallback } = React;
+        try {
+            const fbApp = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js");
+            const fbAuth = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js");
+            const fbFS = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
 
-        // --- 环境参数获取 ---
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db_fs = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'lib-app-v2';
+            if (typeof __firebase_config !== 'undefined') {
+                const config = JSON.parse(__firebase_config);
+                firebaseApp = fbApp.initializeApp(config);
+                auth = fbAuth.getAuth(firebaseApp);
+                db_fs = fbFS.getFirestore(firebaseApp);
+                
+                // 暴露必要的函数给全局或 React
+                window.fbTools = { ...fbAuth, ...fbFS };
+                initialized = true;
+            }
+        } catch (e) {
+            console.warn("云端模式初始化失败，切换为本地离线模式:", e);
+        }
 
-        // 图标组件封装
+        const { useState, useEffect } = React;
+
+        // 图标组件
         const Icon = ({ name, size = 18, className = "" }) => {
-            useEffect(() => { 
-                if (window.lucide) window.lucide.createIcons(); 
-            }, [name]);
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
             return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         };
 
         function App() {
             const [user, setUser] = useState(null);
-            const [view, setView] = useState('login'); 
+            const [view, setView] = useState('login');
             const [libData, setLibData] = useState({ users: [], books: [], loans: [] });
             const [loading, setLoading] = useState(true);
-            const [fbUser, setFbUser] = useState(null);
+            const [mode, setMode] = useState('Checking...');
 
-            // 1. 核心认证逻辑 (遵循 RULE 3)
+            // 初始化数据
             useEffect(() => {
-                const initAuth = async () => {
-                    try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await signInWithCustomToken(auth, __initial_auth_token);
-                        } else {
+                const startApp = async () => {
+                    if (initialized && auth) {
+                        setMode('Cloud');
+                        // 云端逻辑
+                        try {
+                            const { signInAnonymously, onAuthStateChanged } = window.fbTools;
                             await signInAnonymously(auth);
+                            
+                            const appId = typeof __app_id !== 'undefined' ? __app_id : 'lib-app-v2';
+                            const { doc, onSnapshot, setDoc } = window.fbTools;
+                            const dataRef = doc(db_fs, 'artifacts', appId, 'public', 'data');
+                            
+                            onSnapshot(dataRef, (snap) => {
+                                if (snap.exists()) {
+                                    setLibData(snap.data());
+                                } else {
+                                    const init = { users: [{ id: 'ADMIN001', account: '18723992791', password: 'rqy18723992791', role: 'SUPER_ADMIN', name: '系统管理员', status: '正常' }], books: [], loans: [] };
+                                    setDoc(dataRef, init);
+                                    setLibData(init);
+                                }
+                                setLoading(false);
+                            });
+                        } catch (err) {
+                            switchToLocal();
                         }
-                    } catch (e) {
-                        console.error("认证失败，请检查网络连接", e);
+                    } else {
+                        switchToLocal();
                     }
                 };
-                initAuth();
-                const unsubscribe = onAuthStateChanged(auth, (u) => {
-                    setFbUser(u);
-                });
-                return () => unsubscribe();
-            }, []);
 
-            // 2. 数据监听逻辑 (遵循 RULE 1 & 2)
-            useEffect(() => {
-                if (!fbUser) return;
-
-                const dataDocRef = doc(db_fs, 'artifacts', appId, 'public', 'data');
-                
-                // 设置监听器
-                const unsubscribe = onSnapshot(dataDocRef, (docSnap) => {
-                    if (docSnap.exists()) {
-                        const data = docSnap.data();
-                        setLibData(data);
+                const switchToLocal = () => {
+                    setMode('Local');
+                    const local = localStorage.getItem('LIB_LOCAL_BACKUP');
+                    if (local) {
+                        setLibData(JSON.parse(local));
                     } else {
-                        // 首次运行初始化
-                        const initial = {
-                            users: [
-                                { id: 'ADMIN001', account: '18723992791', password: 'rqy18723992791', role: 'SUPER_ADMIN', name: '系统管理员', status: '正常' }
-                            ],
+                        setLibData({
+                            users: [{ id: 'ADMIN001', account: '18723992791', password: 'rqy18723992791', role: 'SUPER_ADMIN', name: '系统管理员', status: '正常' }],
                             books: [],
                             loans: []
-                        };
-                        setDoc(dataDocRef, initial);
-                        setLibData(initial);
+                        });
                     }
                     setLoading(false);
-                }, (error) => {
-                    console.error("云端数据同步错误:", error);
-                    setLoading(false);
-                });
+                };
 
-                // 会话恢复
-                const session = localStorage.getItem('LIB_SESSION_CLOUD');
-                if (session) {
-                    try {
-                        setUser(JSON.parse(session));
-                    } catch (e) {
-                        localStorage.removeItem('LIB_SESSION_CLOUD');
-                    }
-                }
+                startApp();
 
-                return () => unsubscribe();
-            }, [fbUser]);
+                const session = localStorage.getItem('LIB_SESSION');
+                if (session) setUser(JSON.parse(session));
+            }, []);
 
-            // 同步方法
-            const syncDb = async (newData) => {
-                if (!fbUser) return;
-                try {
+            const syncData = async (newData) => {
+                setLibData(newData);
+                localStorage.setItem('LIB_LOCAL_BACKUP', JSON.stringify(newData));
+                if (initialized && mode === 'Cloud') {
+                    const appId = typeof __app_id !== 'undefined' ? __app_id : 'lib-app-v2';
+                    const { doc, setDoc } = window.fbTools;
                     await setDoc(doc(db_fs, 'artifacts', appId, 'public', 'data'), newData);
-                } catch (e) {
-                    console.error("云端写入失败", e);
                 }
             };
 
             const handleLogin = (u) => {
                 setUser(u);
-                localStorage.setItem('LIB_SESSION_CLOUD', JSON.stringify(u));
+                localStorage.setItem('LIB_SESSION', JSON.stringify(u));
                 setView('app');
-            };
-
-            const handleLogout = () => {
-                localStorage.removeItem('LIB_SESSION_CLOUD');
-                setUser(null);
-                setView('login');
             };
 
             if (loading) return (
                 <div className="h-screen flex flex-col items-center justify-center bg-slate-50">
-                    <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-                    <p className="text-slate-400 font-bold animate-pulse text-sm">正在建立云端加密通道...</p>
+                    <div className="loading-ring mb-4"></div>
+                    <p className="text-slate-400 font-bold text-sm">正在加载图书馆系统...</p>
                 </div>
             );
 
             return (
                 <div className="h-screen w-full">
                     {user && view === 'app' ? (
-                        <MainDashboard user={user} db={libData} syncDb={syncDb} onLogout={handleLogout} />
+                        <Dashboard user={user} db={libData} sync={syncData} onLogout={() => { setUser(null); localStorage.removeItem('LIB_SESSION'); }} mode={mode} />
                     ) : (
-                        <AuthGateway view={view} setView={setView} db={libData} onLogin={handleLogin} syncDb={syncDb} />
+                        <Auth db={libData} onLogin={handleLogin} sync={syncData} />
                     )}
                 </div>
             );
         }
 
-        // --- 认证视图 ---
-        function AuthGateway({ view, setView, db, onLogin, syncDb }) {
-            const [form, setForm] = useState({ acc: '', pw: '', name: '', id: '', phone: '' });
-            const [error, setError] = useState('');
+        // --- 登录/注册 ---
+        function Auth({ db, onLogin, sync }) {
+            const [isLogin, setIsLogin] = useState(true);
+            const [form, setForm] = useState({ acc: '', pw: '', name: '', id: '' });
 
-            const login = (e) => {
+            const handleSubmit = (e) => {
                 e.preventDefault();
-                const found = db.users.find(u => (u.account === form.acc || u.id === form.acc) && u.password === form.pw);
-                if (found) onLogin(found);
-                else setError('账号或密码不匹配');
-            };
-
-            const register = (e) => {
-                e.preventDefault();
-                if (db.users.find(u => u.id === form.id)) return alert('学号/ID 已被注册');
-                const newUser = { id: form.id, account: form.phone, phone: form.phone, password: form.pw, name: form.name, role: 'READER', status: '正常' };
-                syncDb({ ...db, users: [...db.users, newUser] });
-                alert('注册成功，请登录');
-                setView('login');
+                if (isLogin) {
+                    const found = db.users.find(u => (u.account === form.acc || u.id === form.acc) && u.password === form.pw);
+                    if (found) onLogin(found);
+                    else alert('账号或密码错误');
+                } else {
+                    if (db.users.find(u => u.id === form.id)) return alert('学号已存在');
+                    const newUser = { ...form, account: form.acc, role: 'READER', status: '正常' };
+                    sync({ ...db, users: [...db.users, newUser] });
+                    alert('注册成功');
+                    setIsLogin(true);
+                }
             };
 
             return (
-                <div className="h-screen flex items-center justify-center academic-bg p-4">
-                    <div className="bg-white p-8 md:p-12 rounded-[2.5rem] shadow-2xl w-full max-w-md space-y-6">
-                        <div className="text-center space-y-2">
-                            <div className="w-16 h-16 bg-indigo-600 rounded-3xl mx-auto flex items-center justify-center text-white shadow-xl shadow-indigo-200">
+                <div className="h-screen flex items-center justify-center academic-bg p-6">
+                    <div className="bg-white p-10 rounded-[2.5rem] shadow-2xl w-full max-w-md">
+                        <div className="text-center mb-8">
+                            <div className="w-16 h-16 bg-indigo-600 rounded-3xl mx-auto flex items-center justify-center text-white mb-4 shadow-xl shadow-indigo-100">
                                 <Icon name="library" size={32} />
                             </div>
-                            <h1 className="text-2xl font-black text-slate-800">智慧图书馆</h1>
-                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Cloud Access Protocol</p>
+                            <h2 className="text-2xl font-black text-slate-800">智慧图书馆平台</h2>
                         </div>
-                        <form onSubmit={view === 'login' ? login : register} className="space-y-4">
-                            {view === 'register' && (
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            {!isLogin && (
                                 <div className="grid grid-cols-2 gap-3">
-                                    <input className="border p-3 rounded-2xl text-sm bg-slate-50 outline-none focus:ring-2 ring-indigo-500 transition-all" placeholder="姓名" required onChange={e=>setForm({...form, name: e.target.value})} />
-                                    <input className="border p-3 rounded-2xl text-sm bg-slate-50 outline-none focus:ring-2 ring-indigo-500 transition-all" placeholder="学号/ID" required onChange={e=>setForm({...form, id: e.target.value})} />
+                                    <input className="bg-slate-50 p-4 rounded-2xl outline-none text-sm w-full" placeholder="姓名" required onChange={e=>setForm({...form, name:e.target.value})} />
+                                    <input className="bg-slate-50 p-4 rounded-2xl outline-none text-sm w-full" placeholder="学号" required onChange={e=>setForm({...form, id:e.target.value})} />
                                 </div>
                             )}
-                            <input className="w-full border p-3 rounded-2xl text-sm bg-slate-50 outline-none focus:ring-2 ring-indigo-500 transition-all" placeholder="账号/手机" required onChange={e=>setForm({...form, acc: e.target.value, phone: e.target.value})} />
-                            <input className="w-full border p-3 rounded-2xl text-sm bg-slate-50 outline-none focus:ring-2 ring-indigo-500 transition-all" type="password" placeholder="密码" required onChange={e=>setForm({...form, pw: e.target.value})} />
-                            {error && <div className="text-red-500 text-xs font-bold text-center italic">{error}</div>}
-                            <button className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 active:scale-95 transition-all">
-                                {view === 'login' ? '授权登录' : '提交注册'}
-                            </button>
+                            <input className="bg-slate-50 p-4 rounded-2xl outline-none text-sm w-full" placeholder="账号/手机" required onChange={e=>setForm({...form, acc:e.target.value})} />
+                            <input className="bg-slate-50 p-4 rounded-2xl outline-none text-sm w-full" type="password" placeholder="密码" required onChange={e=>setForm({...form, pw:e.target.value})} />
+                            <button className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100">{isLogin ? '登录' : '注册'}</button>
                         </form>
-                        <button onClick={() => setView(view === 'login' ? 'register' : 'login')} className="w-full text-xs text-slate-400 font-bold hover:text-indigo-600">
-                            {view === 'login' ? '没有账号？申请加入' : '已有账号？返回登录'}
-                        </button>
+                        <button onClick={() => setIsLogin(!isLogin)} className="w-full mt-6 text-xs text-slate-400 font-bold uppercase tracking-widest">{isLogin ? '新读者注册' : '返回登录'}</button>
                     </div>
                 </div>
             );
         }
 
         // --- 主面板 ---
-        function MainDashboard({ user, db, syncDb, onLogout }) {
-            const [activeTab, setActiveTab] = useState(user.role === 'READER' ? 'catalog' : 'inventory');
-
-            const menu = user.role === 'READER' ? [
-                { id: 'catalog', label: '馆藏检索', icon: 'search' },
-                { id: 'mylibrary', label: '我的借阅', icon: 'book-user' }
-            ] : [
-                { id: 'inventory', label: '图书入库', icon: 'package-plus' },
-                { id: 'catalog', label: '馆藏管理', icon: 'library' },
-                { id: 'users', label: '读者管理', icon: 'users' }
-            ];
-
+        function Dashboard({ user, db, sync, onLogout, mode }) {
+            const [tab, setTab] = useState(user.role.includes('ADMIN') ? 'inventory' : 'catalog');
+            
             return (
-                <div className="flex h-full overflow-hidden">
-                    <aside className="w-64 bg-slate-900 text-white flex flex-col shrink-0">
-                        <div className="p-8 font-black text-xl flex items-center gap-3">
-                            <div className="bg-indigo-600 p-2 rounded-xl shadow-lg shadow-indigo-500/20"><Icon name="library" size={20} /></div>
-                            <span>智慧图书馆</span>
+                <div className="flex h-full">
+                    <aside className="w-64 bg-slate-900 text-white flex flex-col p-6">
+                        <div className="font-black text-xl mb-10 flex items-center gap-2">
+                            <Icon name="library" className="text-indigo-500" /> 智慧系统
                         </div>
-                        <nav className="flex-1 px-4 space-y-1">
-                            {menu.map(item => (
-                                <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all ${activeTab === item.id ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
-                                    <Icon name={item.icon} size={20} />
-                                    <span className="text-sm font-bold">{item.label}</span>
-                                </button>
-                            ))}
-                        </nav>
-                        <div className="p-6">
-                            <div className="bg-slate-800 p-4 rounded-3xl border border-white/5 space-y-4">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center font-black">{user.name[0]}</div>
-                                    <div className="overflow-hidden">
-                                        <div className="text-xs font-bold truncate">{user.name}</div>
-                                        <div className="text-[8px] text-slate-500 font-black uppercase tracking-widest">{user.role}</div>
-                                    </div>
-                                </div>
-                                <button onClick={onLogout} className="w-full py-2 bg-slate-900 text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-red-400 transition-colors border border-white/5 rounded-xl">Logout</button>
-                            </div>
+                        <div className="flex-1 space-y-2">
+                            <MenuBtn active={tab === 'catalog'} onClick={()=>setTab('catalog')} icon="search" label="馆藏查询" />
+                            {user.role.includes('ADMIN') && <MenuBtn active={tab === 'inventory'} onClick={()=>setTab('inventory')} icon="plus-circle" label="图书入库" />}
+                            <MenuBtn active={tab === 'loans'} onClick={()=>setTab('loans')} icon="book-open" label={user.role.includes('ADMIN') ? '借阅管理' : '我的借阅'} />
+                        </div>
+                        <div className="bg-slate-800 p-4 rounded-2xl mt-auto">
+                            <div className="text-xs font-bold mb-1">{user.name}</div>
+                            <div className="text-[10px] text-slate-500 uppercase font-black mb-4">{mode} MODE</div>
+                            <button onClick={onLogout} className="text-[10px] font-black text-red-400 uppercase">退出登录</button>
                         </div>
                     </aside>
-                    <main className="flex-1 overflow-auto bg-slate-50">
-                        <header className="h-16 bg-white/80 backdrop-blur-md border-b px-10 flex items-center justify-between sticky top-0 z-30">
-                            <h2 className="font-black text-slate-800 flex items-center gap-3 text-lg">
-                                <Icon name={menu.find(m=>m.id===activeTab)?.icon} className="text-indigo-600"/>
-                                {menu.find(m => m.id === activeTab)?.label}
-                            </h2>
-                            <div className="flex items-center gap-3">
-                                <span className="px-3 py-1 bg-indigo-50 text-indigo-600 text-[10px] font-black rounded-full border border-indigo-100 uppercase tracking-tighter">Secure Cloud Live</span>
-                            </div>
-                        </header>
-                        <div className="p-10 max-w-7xl mx-auto">
-                            {activeTab === 'inventory' && <InventoryView db={db} syncDb={syncDb} />}
-                            {activeTab === 'catalog' && <CatalogView db={db} syncDb={syncDb} user={user} />}
-                            {activeTab === 'mylibrary' && <MyLibraryView db={db} syncDb={syncDb} user={user} />}
-                            {activeTab === 'users' && <UsersView db={db} />}
-                        </div>
+                    <main className="flex-1 overflow-auto p-10">
+                        {tab === 'catalog' && <Catalog db={db} user={user} sync={sync} />}
+                        {tab === 'inventory' && <Inventory db={db} sync={sync} />}
+                        {tab === 'loans' && <Loans db={db} user={user} sync={sync} />}
                     </main>
                 </div>
             );
         }
 
-        // --- 子组件: 馆藏检索 ---
-        function CatalogView({ db, syncDb, user }) {
-            const [search, setSearch] = useState('');
-            const filteredBooks = db.books.filter(b => b.title.toLowerCase().includes(search.toLowerCase()) || b.author.includes(search));
+        function MenuBtn({ active, onClick, icon, label }) {
+            return (
+                <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${active ? 'bg-indigo-600' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
+                    <Icon name={icon} size={18} /> {label}
+                </button>
+            );
+        }
 
-            const handleBorrow = async (book) => {
-                if (book.available <= 0) return alert('该图书目前无在馆复本');
-                const dueDate = new Date();
-                dueDate.setDate(dueDate.getDate() + 30);
-
-                const newLoan = {
-                    id: `L${Date.now()}`,
-                    userId: user.id,
-                    userName: user.name,
-                    bookId: book.id,
-                    title: book.title,
-                    borrowDate: new Date().toISOString().split('T')[0],
-                    dueDate: dueDate.toISOString().split('T')[0],
-                    status: 'ACTIVE'
-                };
-
-                const updatedBooks = db.books.map(b => b.id === book.id ? { ...b, available: b.available - 1 } : b);
-                await syncDb({ ...db, books: updatedBooks, loans: [...db.loans, newLoan] });
-                alert('借阅成功，请前往服务台领取');
+        // --- 模块: 入库 ---
+        function Inventory({ db, sync }) {
+            const [f, setF] = useState({ title: '', author: '', isbn: '', stock: 1, cover: '' });
+            
+            const handleAdd = () => {
+                if(!f.title || !f.isbn) return alert('请填写书名和ISBN');
+                const newB = { ...f, id: 'B'+Date.now(), available: parseInt(f.stock), stock: parseInt(f.stock) };
+                sync({ ...db, books: [newB, ...db.books] });
+                alert('入库成功');
+                setF({ title: '', author: '', isbn: '', stock: 1, cover: '' });
             };
 
             return (
-                <div className="space-y-8">
-                    <div className="relative group">
-                        <Icon name="search" size={24} className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-indigo-500 transition-colors" />
-                        <input className="w-full pl-16 pr-6 py-6 bg-white border border-slate-200 rounded-[2rem] outline-none shadow-sm text-lg font-medium transition-all focus:ring-4 ring-indigo-500/10" placeholder="检索书名、作者或 ISBN..." value={search} onChange={e=>setSearch(e.target.value)} />
+                <div className="max-w-2xl bg-white p-10 rounded-[2.5rem] shadow-sm border border-slate-100 animate-in slide-in-from-bottom-4 duration-500">
+                    <h2 className="text-2xl font-black mb-8 italic">New Book Entry</h2>
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                            <Input label="ISBN" value={f.isbn} onChange={v=>setF({...f, isbn:v})} />
+                            <Input label="库存数量" type="number" value={f.stock} onChange={v=>setF({...f, stock:v})} />
+                        </div>
+                        <Input label="图书名称" value={f.title} onChange={v=>setF({...f, title:v})} />
+                        <Input label="作者" value={f.author} onChange={v=>setF({...f, author:v})} />
+                        <div className="pt-4">
+                            <button onClick={handleAdd} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg shadow-indigo-100">确认入库</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 模块: 查询 ---
+        function Catalog({ db, user, sync }) {
+            const [q, setQ] = useState('');
+            const list = db.books.filter(b => b.title.includes(q) || b.author.includes(q));
+
+            const borrow = (book) => {
+                if(book.available <= 0) return alert('无库存');
+                const loan = { id: 'L'+Date.now(), bookId: book.id, title: book.title, userId: user.id, date: new Date().toLocaleDateString(), status: 'ACTIVE' };
+                const books = db.books.map(b => b.id === book.id ? { ...b, available: b.available - 1 } : b);
+                sync({ ...db, books, loans: [loan, ...db.loans] });
+                alert('借阅成功');
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="bg-white p-2 rounded-2xl shadow-sm border border-slate-100 flex items-center px-4">
+                        <Icon name="search" className="text-slate-300" />
+                        <input className="flex-1 p-4 outline-none font-bold text-slate-700" placeholder="快速检索书名或作者..." onChange={e=>setQ(e.target.value)} />
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {filteredBooks.map(book => (
-                            <div key={book.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 flex gap-6 hover:shadow-xl transition-all duration-300 group">
-                                <div className="w-28 h-40 bg-slate-50 rounded-2xl flex-shrink-0 overflow-hidden border border-slate-100 flex items-center justify-center">
-                                    {book.cover ? <img src={book.cover} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" /> : <Icon name="book" size={32} className="text-slate-200" />}
+                        {list.map(b => (
+                            <div key={b.id} className="bg-white p-6 rounded-3xl border border-slate-100 flex gap-4 hover:shadow-lg transition-all">
+                                <div className="w-20 h-28 bg-slate-50 rounded-xl flex items-center justify-center shrink-0">
+                                    <Icon name="book" className="text-slate-200" size={32} />
                                 </div>
-                                <div className="flex-1 flex flex-col justify-between py-1">
+                                <div className="flex-1 flex flex-col justify-between">
                                     <div>
-                                        <h3 className="text-lg font-black text-slate-800 line-clamp-1">{book.title}</h3>
-                                        <p className="text-sm text-slate-400 font-bold mb-3 italic">{book.author}</p>
-                                        <div className="flex gap-2">
-                                            <span className="px-2 py-1 bg-slate-100 text-slate-500 text-[9px] font-black rounded uppercase">{book.callNumber}</span>
-                                            <span className="px-2 py-1 bg-indigo-50 text-indigo-500 text-[9px] font-black rounded uppercase">{book.location}</span>
-                                        </div>
+                                        <div className="font-black text-slate-800">{b.title}</div>
+                                        <div className="text-xs text-slate-400 font-bold">{b.author}</div>
                                     </div>
                                     <div className="flex items-center justify-between mt-4">
-                                        <div>
-                                            <div className={`text-xs font-black ${book.available > 0 ? 'text-green-500' : 'text-red-400'}`}>{book.available > 0 ? '在馆可借' : '全数借出'}</div>
-                                            <div className="text-[10px] text-slate-300 font-bold">库存: {book.available}/{book.stock}</div>
-                                        </div>
-                                        {user.role === 'READER' && (
-                                            <button onClick={() => handleBorrow(book)} disabled={book.available <= 0} className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all ${book.available > 0 ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700' : 'bg-slate-100 text-slate-300'}`}>立即借阅</button>
-                                        )}
+                                        <div className="text-[10px] font-black uppercase text-indigo-500">余量: {b.available}/{b.stock}</div>
+                                        {user.role === 'READER' && <button onClick={()=>borrow(b)} className="px-4 py-1.5 bg-slate-900 text-white rounded-lg text-[10px] font-black uppercase tracking-widest">借阅</button>}
                                     </div>
                                 </div>
                             </div>
@@ -330,123 +301,20 @@
             );
         }
 
-        // --- 子组件: 我的借阅 ---
-        function MyLibraryView({ db, syncDb, user }) {
-            const myLoans = db.loans.filter(l => l.userId === user.id && l.status === 'ACTIVE');
-            
-            const handleReturn = async (loan) => {
-                const updatedLoans = db.loans.map(l => l.id === loan.id ? { ...l, status: 'RETURNED' } : l);
-                const updatedBooks = db.books.map(b => b.id === loan.bookId ? { ...b, available: b.available + 1 } : b);
-                await syncDb({ ...db, loans: updatedLoans, books: updatedBooks });
-                alert('图书归还申请已处理');
-            };
-
+        function Loans({ db, user, sync }) {
+            const my = user.role.includes('ADMIN') ? db.loans : db.loans.filter(l => l.userId === user.id);
             return (
-                <div className="space-y-8">
-                    <div className="bg-indigo-600 p-10 rounded-[2.5rem] text-white flex justify-between items-center shadow-2xl shadow-indigo-100">
-                        <div>
-                            <div className="text-4xl font-black">{myLoans.length}</div>
-                            <div className="text-xs font-bold uppercase tracking-widest opacity-60 mt-2 text-indigo-200">Current Borrowings</div>
-                        </div>
-                        <Icon name="book-check" size={48} className="opacity-20" />
-                    </div>
-                    <div className="bg-white rounded-[2rem] border border-slate-100 overflow-hidden">
-                        <table className="w-full text-left">
-                            <thead className="bg-slate-50 border-b">
-                                <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                                    <th className="px-10 py-5">书名</th>
-                                    <th className="px-10 py-5">应还日期</th>
-                                    <th className="px-10 py-5 text-right">操作</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-50">
-                                {myLoans.map(loan => (
-                                    <tr key={loan.id} className="hover:bg-slate-50/50 transition-colors">
-                                        <td className="px-10 py-6 font-black text-slate-700">{loan.title}</td>
-                                        <td className="px-10 py-6 text-indigo-600 font-mono font-bold text-xs">{loan.dueDate}</td>
-                                        <td className="px-10 py-6 text-right">
-                                            <button onClick={() => handleReturn(loan)} className="px-4 py-2 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black uppercase hover:bg-slate-200">归还图书</button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                        {myLoans.length === 0 && <div className="p-20 text-center text-slate-300 italic font-medium">无待还图书</div>}
-                    </div>
-                </div>
-            );
-        }
-
-        // --- 子组件: 图书入库 ---
-        function InventoryView({ db, syncDb }) {
-            const [form, setForm] = useState({ isbn: '', title: '', author: '', count: 1, location: '', callNumber: '', cover: '' });
-            
-            const handleImage = (e) => {
-                const file = e.target.files[0];
-                if (file) {
-                    if (file.size > 800 * 1024) return alert("图片请压缩至 800KB 以内以获得最佳体验");
-                    const reader = new FileReader();
-                    reader.onloadend = () => setForm({ ...form, cover: reader.result });
-                    reader.readAsDataURL(file);
-                }
-            };
-
-            const handleAdd = async () => {
-                if(!form.title || !form.isbn) return alert('核心字段不能为空');
-                const newBook = { ...form, id: `B${Date.now()}`, stock: parseInt(form.count), available: parseInt(form.count) };
-                await syncDb({ ...db, books: [newBook, ...db.books] });
-                alert('数据已同步至全球云端节点');
-                setForm({ isbn: '', title: '', author: '', count: 1, location: '', callNumber: '', cover: '' });
-            };
-
-            return (
-                <div className="max-w-4xl bg-white p-12 rounded-[3rem] border border-slate-100 space-y-10 shadow-sm">
-                    <div className="flex items-center gap-4">
-                        <div className="w-2 h-8 bg-indigo-600 rounded-full"></div>
-                        <h2 className="text-3xl font-black text-slate-800 tracking-tight">文献入库系统</h2>
-                    </div>
-                    <div className="flex gap-12">
-                        <div className="w-40 h-56 bg-slate-50 border-4 border-dashed border-slate-100 rounded-[2rem] flex items-center justify-center overflow-hidden relative hover:bg-white hover:border-indigo-200 transition-all cursor-pointer group">
-                            {form.cover ? <img src={form.cover} className="w-full h-full object-cover" /> : <div className="text-center text-slate-300"><Icon name="image-plus" size={32} className="mx-auto" /><span className="text-[9px] font-black mt-3 block uppercase">上传封面</span></div>}
-                            <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleImage} />
-                        </div>
-                        <div className="flex-1 grid grid-cols-2 gap-6">
-                            <Input label="ISBN 条码" value={form.isbn} onChange={v=>setForm({...form, isbn: v})} />
-                            <Input label="入库复本量" type="number" value={form.count} onChange={v=>setForm({...form, count: v})} />
-                            <div className="col-span-2"><Input label="文献标准题名" value={form.title} onChange={v=>setForm({...form, title: v})} /></div>
-                            <Input label="责任者" value={form.author} onChange={v=>setForm({...form, author: v})} />
-                            <Input label="分类索书号" value={form.callNumber} onChange={v=>setForm({...form, callNumber: v})} />
-                        </div>
-                    </div>
-                    <Input label="馆藏架位(层级)" value={form.location} onChange={v=>setForm({...form, location: v})} />
-                    <button onClick={handleAdd} className="w-full py-6 bg-indigo-600 text-white rounded-[1.5rem] font-black text-lg shadow-xl shadow-indigo-100 hover:bg-indigo-700 hover:-translate-y-1 active:scale-95 transition-all uppercase tracking-widest">Execute Cloud Entry</button>
-                </div>
-            );
-        }
-
-        // --- 子组件: 用户视图 ---
-        function UsersView({ db }) {
-            return (
-                <div className="bg-white rounded-[2rem] border border-slate-100 overflow-hidden">
+                <div className="bg-white rounded-3xl border border-slate-100 overflow-hidden">
                     <table className="w-full text-left">
-                        <thead className="bg-slate-50 border-b">
-                            <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                                <th className="px-10 py-5">读者</th>
-                                <th className="px-10 py-5">ID</th>
-                                <th className="px-10 py-5">权限组</th>
-                                <th className="px-10 py-5">状态</th>
-                            </tr>
+                        <thead className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                            <tr><th className="p-6">图书</th><th className="p-6">日期</th><th className="p-6">状态</th></tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50">
-                            {db.users.map(u => (
-                                <tr key={u.id}>
-                                    <td className="px-10 py-6 font-bold flex items-center gap-3">
-                                        <div className="w-8 h-8 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center text-[10px] font-black">{u.name[0]}</div>
-                                        {u.name}
-                                    </td>
-                                    <td className="px-10 py-6 font-mono text-xs text-slate-400">{u.id}</td>
-                                    <td className="px-10 py-6"><span className="px-2 py-1 bg-slate-100 text-[9px] font-black rounded uppercase">{u.role}</span></td>
-                                    <td className="px-10 py-6 text-green-500 font-bold text-[10px] uppercase">Active</td>
+                            {my.map(l => (
+                                <tr key={l.id} className="text-sm">
+                                    <td className="p-6 font-bold">{l.title}</td>
+                                    <td className="p-6 text-slate-400">{l.date}</td>
+                                    <td className="p-6 text-green-500 font-black text-xs uppercase">{l.status}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -457,9 +325,9 @@
 
         function Input({ label, value, onChange, type="text" }) {
             return (
-                <div className="space-y-1.5">
-                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{label}</label>
-                    <input type={type} value={value} onChange={e => onChange(e.target.value)} className="w-full p-4 bg-slate-50 border-none rounded-2xl text-sm font-bold focus:ring-4 ring-indigo-500/10 transition-all outline-none" />
+                <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{label}</label>
+                    <input type={type} value={value} onChange={e=>onChange(e.target.value)} className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm focus:ring-2 ring-indigo-500/20" />
                 </div>
             );
         }

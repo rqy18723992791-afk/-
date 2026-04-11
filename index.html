@@ -32,8 +32,9 @@
         };
 
         const DB_KEY = "THU_LIB_V3";
+        const DRAFT_KEY = "ADD_BOOK_DRAFT";
 
-        // 初始数据
+        // 初始数据（管理员账号已内置）
         const INITIAL_DB = {
             users: [
                 { id: '18723992791', account: '18723992791', password: 'rqy18723992791', role: 'ADMIN', name: '系统管理员' }
@@ -46,7 +47,10 @@
         };
 
         function App() {
-            const [user, setUser] = useState(() => JSON.parse(localStorage.getItem("USER_SESSION")));
+            const [user, setUser] = useState(() => {
+                const saved = localStorage.getItem("USER_SESSION");
+                return saved ? JSON.parse(saved) : null;
+            });
             const [db, setDb] = useState(() => {
                 const saved = localStorage.getItem(DB_KEY);
                 return saved ? JSON.parse(saved) : INITIAL_DB;
@@ -77,11 +81,11 @@
             );
         }
 
-        // --- 登录页面 ---
+        // ==================== 以下所有组件完整定义 ====================
+
         function LoginPage({ onLogin, db }) {
             const [acc, setAcc] = useState('');
             const [pw, setPw] = useState('');
-
             return (
                 <div className="h-screen flex items-center justify-center bg-slate-900 relative overflow-hidden">
                     <div className="absolute top-0 left-0 w-full h-full opacity-30">
@@ -114,30 +118,21 @@
             );
         }
 
-        // --- 主仪表盘 ---
         function Dashboard({ user, db, setDb, onLogout }) {
             const [view, setView] = useState(user.role === 'ADMIN' ? 'admin_home' : 'reader_home');
             const [search, setSearch] = useState('');
-
             const filteredBooks = db.books.filter(b => b.title.includes(search) || b.isbn.includes(search));
 
             const borrowBook = (book) => {
                 if(book.available <= 0) return alert("暂无库存");
                 const newBooks = db.books.map(b => b.id === book.id ? {...b, available: b.available - 1} : b);
-                const newBorrow = {
-                    id: Date.now(),
-                    userId: user.id,
-                    bookTitle: book.title,
-                    date: new Date().toLocaleDateString(),
-                    due: '2024-05-12' // 演示数据
-                };
+                const newBorrow = { id: Date.now(), userId: user.id, bookTitle: book.title, date: new Date().toLocaleDateString(), due: '2024-05-12' };
                 setDb({...db, books: newBooks, borrowings: [newBorrow, ...db.borrowings]});
                 alert("预约成功！请在 24 小时内到馆取书。");
             };
 
             return (
                 <div className="flex h-screen overflow-hidden">
-                    {/* 侧边导航 */}
                     <aside className="w-72 border-r bg-white p-8 flex flex-col">
                         <div className="flex items-center gap-3 mb-12">
                             <div className="w-10 h-10 thu-purple rounded-xl flex items-center justify-center text-white shadow-lg shadow-purple-200">
@@ -171,7 +166,6 @@
                         </div>
                     </aside>
 
-                    {/* 主内容 */}
                     <main className="flex-1 overflow-y-auto bg-slate-50 p-12">
                         {view === 'reader_home' && <ReaderHome db={db} setView={setView} />}
                         {view === 'admin_home' && <AdminHome db={db} />}
@@ -183,7 +177,7 @@
             );
         }
 
-        // --- 读者首页组件 ---
+        // 读者首页
         function ReaderHome({ db, setView }) {
             return (
                 <div className="animate-in">
@@ -216,7 +210,7 @@
             );
         }
 
-        // --- 图书检索视图 ---
+        // 图书检索
         function SearchView({ books, onBorrow, search, setSearch }) {
             return (
                 <div className="animate-in">
@@ -224,7 +218,6 @@
                         <Icon name="search" className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400" />
                         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="输入书名、作者或 ISBN 搜索馆藏..." className="w-full pl-16 pr-8 py-5 bg-white rounded-3xl border-none shadow-sm focus:ring-4 ring-purple-100 outline-none text-lg transition-all" />
                     </div>
-
                     <div className="grid grid-cols-2 gap-6">
                         {books.map(b => (
                             <div key={b.id} className="bg-white p-6 rounded-[2.5rem] flex gap-6 border border-slate-100 hover:shadow-xl transition-all">
@@ -247,7 +240,7 @@
             );
         }
 
-        // --- 借阅历史 ---
+        // 我的借阅
         function MyBorrowings({ borrowings, userId }) {
             const mine = borrowings.filter(b => b.userId === userId);
             return (
@@ -280,7 +273,7 @@
             );
         }
 
-        // --- 管理员首页组件 ---
+        // 管理员首页
         function AdminHome({ db }) {
             const stats = [
                 { label: '在馆书本', val: db.books.reduce((a, b) => a + b.total, 0), icon: 'book' },
@@ -326,15 +319,42 @@
             );
         }
 
-        // --- 入库组件 ---
+        // 新书入库（已实现表单+图片本地持久化）
         function AddBook({ db, setDb }) {
-            const [f, setF] = useState({ title: '', isbn: '', author: '', category: '通用', total: 5, cover: '', location: '' });
-            
+            const [f, setF] = useState(() => {
+                const savedDraft = localStorage.getItem(DRAFT_KEY);
+                return savedDraft ? JSON.parse(savedDraft) : { title: '', isbn: '', author: '', category: '通用', total: 5, cover: '', location: '' };
+            });
+
+            useEffect(() => {
+                localStorage.setItem(DRAFT_KEY, JSON.stringify(f));
+            }, [f]);
+
+            const handleFileSelect = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => setF(prev => ({ ...prev, cover: ev.target.result }));
+                reader.readAsDataURL(file);
+            };
+
             const submit = (e) => {
                 e.preventDefault();
-                const newBook = { ...f, id: 'B' + Date.now(), available: parseInt(f.total), total: parseInt(f.total) };
+                if (!f.title || !f.isbn) return alert("书名和 ISBN 不能为空");
+                const newBook = {
+                    id: 'B' + Date.now(),
+                    isbn: f.isbn,
+                    title: f.title,
+                    author: f.author || '未知',
+                    category: f.category,
+                    total: parseInt(f.total),
+                    available: parseInt(f.total),
+                    location: f.location || '暂无架位',
+                    cover: f.cover || 'https://via.placeholder.com/300x400?text=No+Cover'
+                };
                 setDb({ ...db, books: [newBook, ...db.books] });
-                alert("录入成功！");
+                alert("✅ 录入成功！数据已保存");
+                localStorage.removeItem(DRAFT_KEY);
                 setF({ title: '', isbn: '', author: '', category: '通用', total: 5, cover: '', location: '' });
             };
 
@@ -348,16 +368,28 @@
                         <Field label="分类" value={f.category} onChange={v=>setF({...f, category: v})} />
                         <Field label="架位" value={f.location} onChange={v=>setF({...f, location: v})} placeholder="如: 3F-A1" />
                         <Field label="数量" type="number" value={f.total} onChange={v=>setF({...f, total: v})} />
-                        <div className="col-span-2">
-                            <Field label="封面图片 URL" value={f.cover} onChange={v=>setF({...f, cover: v})} placeholder="https://..." />
+
+                        <div className="col-span-2 space-y-3">
+                            <label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">封面图片</label>
+                            <div className="flex items-end gap-6">
+                                <input type="file" accept="image/*" onChange={handleFileSelect}
+                                    className="flex-1 p-3.5 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 ring-purple-500 outline-none transition-all file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100" />
+                                {f.cover && <img src={f.cover} alt="预览" className="w-28 h-36 object-cover rounded-2xl shadow-md border border-slate-200" />}
+                            </div>
+                            <p className="text-[10px] text-slate-400">✅ 支持本地图片，刷新页面也不会丢失</p>
+                            <input type="text" value={f.cover && !f.cover.startsWith('data:') ? f.cover : ''} 
+                                onChange={e => setF({...f, cover: e.target.value})}
+                                placeholder="或粘贴图片 URL"
+                                className="w-full p-3.5 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 ring-purple-500 outline-none transition-all" />
                         </div>
-                        <button className="col-span-2 py-4 thu-purple text-white rounded-2xl font-bold mt-4 shadow-lg shadow-purple-100 active:scale-95 transition-all">确认入库并分编</button>
+
+                        <button type="submit" className="col-span-2 py-4 thu-purple text-white rounded-2xl font-bold mt-6 shadow-lg shadow-purple-100 active:scale-95 transition-all">确认入库并分编</button>
                     </form>
                 </div>
             );
         }
 
-        // --- 辅助小组件 ---
+        // 辅助组件
         const NavBtn = ({ icon, label, active, onClick }) => (
             <button onClick={onClick} className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl font-bold transition-all ${active ? 'bg-purple-600 text-white shadow-lg shadow-purple-100 translate-x-1' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-800'}`}>
                 <Icon name={icon} size={20} />
@@ -372,6 +404,7 @@
             </div>
         );
 
+        // 启动 React
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>

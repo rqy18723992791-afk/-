@@ -2,381 +2,378 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>智慧图书馆 - 数字化云端管理平台</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>THU-Style 数字化图书管理平台</title>
+    <!-- 核心依赖 -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        /* 移动端适配与防抖动样式 */
-        body { -webkit-tap-highlight-color: transparent; font-family: system-ui, -apple-system, sans-serif; overflow-x: hidden; }
-        .tab-content { animation: fadeIn 0.3s ease-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        
-        @media (max-width: 768px) {
-            .mobile-nav { position: fixed; bottom: 0; left: 0; right: 0; background: white; display: flex; border-top: 1px solid #e2e8f0; z-index: 50; }
-            .mobile-nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 10px 0; font-size: 10px; color: #64748b; }
-            .mobile-nav-item.active { color: #4f46e5; }
-            .main-content { padding-bottom: 80px !important; }
-            .sidebar { display: none; }
-        }
-        
-        .book-card img { transition: transform 0.3s; }
-        .book-card:hover img { transform: scale(1.05); }
+        body { font-family: 'Inter', 'PingFang SC', sans-serif; }
+        .thu-purple { background: linear-gradient(135deg, #6b21a8 0%, #4338ca 100%); }
+        .glass { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
+        .book-card:hover { transform: translateY(-8px); box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1); }
+        .animate-in { animation: slideUp 0.4s ease-out forwards; }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-50 text-slate-900">
+    <div id="root"></div>
 
-    <!-- 登录注册模块 -->
-    <div id="auth-screen" class="min-h-screen flex items-center justify-center bg-indigo-600 p-4">
-        <div class="bg-white w-full max-w-md rounded-3xl shadow-2xl p-8">
-            <div class="text-center mb-8">
-                <div class="inline-block p-4 bg-indigo-100 rounded-2xl mb-4">
-                    <svg class="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
-                </div>
-                <h1 class="text-2xl font-bold text-slate-800" id="auth-title">欢迎回来</h1>
-                <p class="text-slate-400 mt-2" id="auth-subtitle">请输入您的账号访问图书馆</p>
-            </div>
+    <script type="text/babel">
+        const { useState, useEffect } = React;
 
-            <div class="space-y-4">
-                <div>
-                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">手机账号</label>
-                    <input type="text" id="auth-acc" value="18723992791" class="w-full p-4 bg-slate-50 rounded-xl border-2 border-transparent focus:border-indigo-500 outline-none transition-all">
-                </div>
-                <div>
-                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">访问密码</label>
-                    <input type="password" id="auth-pw" value="rqy18723992791" class="w-full p-4 bg-slate-50 rounded-xl border-2 border-transparent focus:border-indigo-500 outline-none transition-all">
-                </div>
-                <button onclick="handleAuth()" id="auth-btn" class="w-full py-4 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-100 active:scale-95 transition-all">登录系统</button>
-                <div class="text-center">
-                    <button onclick="toggleAuthMode()" id="auth-switch" class="text-sm text-indigo-600 font-medium">还没有账号？立即注册</button>
-                </div>
-            </div>
-            <p id="auth-msg" class="text-center text-rose-500 text-sm mt-4"></p>
-        </div>
-    </div>
-
-    <!-- 主界面模块 -->
-    <div id="app-screen" class="hidden min-h-screen flex flex-col md:flex-row">
-        <!-- 侧边栏 (桌面端) -->
-        <aside class="sidebar w-64 bg-slate-900 text-white p-6 flex flex-col shrink-0">
-            <div class="flex items-center gap-3 mb-12">
-                <div class="w-8 h-8 bg-indigo-500 rounded-lg"></div>
-                <span class="font-black text-xl tracking-tighter">CLOUD LIB</span>
-            </div>
-            <nav class="space-y-2 flex-1">
-                <button onclick="switchTab('catalog')" id="nav-catalog" class="w-full text-left p-4 rounded-xl font-bold transition-all bg-indigo-600">馆藏中心</button>
-                <button onclick="switchTab('admin')" id="nav-admin" class="w-full text-left p-4 rounded-xl font-bold transition-all hidden">图书管理</button>
-                <button onclick="switchTab('profile')" id="nav-profile" class="w-full text-left p-4 rounded-xl font-bold transition-all">借阅历史</button>
-            </nav>
-            <div class="mt-auto border-t border-white/10 pt-6">
-                <p id="user-name" class="font-bold">加载中...</p>
-                <button onclick="logout()" class="text-xs text-rose-400 mt-2 font-bold">退出登录</button>
-            </div>
-        </aside>
-
-        <!-- 内容区域 -->
-        <main class="main-content flex-1 overflow-y-auto p-4 md:p-10">
-            <!-- 馆藏中心 -->
-            <section id="tab-catalog" class="tab-content">
-                <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
-                    <div>
-                        <h2 class="text-3xl font-black text-slate-800">馆藏目录</h2>
-                        <p class="text-slate-400 text-sm">探索您感兴趣的知识</p>
-                    </div>
-                    <div class="w-full md:w-72">
-                        <input type="text" id="search-input" oninput="renderBooks()" placeholder="搜索书名/作者..." class="w-full p-4 bg-white rounded-2xl shadow-sm border-none focus:ring-2 ring-indigo-500/20">
-                    </div>
-                </div>
-                <div id="book-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-8">
-                    <!-- 书籍动态加载 -->
-                </div>
-            </section>
-
-            <!-- 图书管理 -->
-            <section id="tab-admin" class="tab-content hidden">
-                <h2 class="text-3xl font-black text-slate-800 mb-8">图书入库</h2>
-                <div class="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 max-w-2xl">
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div class="space-y-4">
-                            <div><label class="text-xs font-bold text-slate-400 uppercase">书名</label><input type="text" id="in-title" class="w-full p-4 bg-slate-50 rounded-xl outline-none border-2 border-transparent focus:border-indigo-500"></div>
-                            <div><label class="text-xs font-bold text-slate-400 uppercase">作者</label><input type="text" id="in-author" class="w-full p-4 bg-slate-50 rounded-xl outline-none border-2 border-transparent focus:border-indigo-500"></div>
-                            <div><label class="text-xs font-bold text-slate-400 uppercase">库存数量</label><input type="number" id="in-stock" value="1" class="w-full p-4 bg-slate-50 rounded-xl outline-none border-2 border-transparent focus:border-indigo-500"></div>
-                        </div>
-                        <div class="space-y-4">
-                            <label class="text-xs font-bold text-slate-400 uppercase">图书封面</label>
-                            <div id="image-preview" onclick="document.getElementById('in-file').click()" class="aspect-[3/4] bg-slate-50 rounded-xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer overflow-hidden relative">
-                                <span class="text-slate-400 text-xs font-bold">点击选择照片</span>
-                                <input type="file" id="in-file" accept="image/*" class="hidden" onchange="previewImage(this)">
-                            </div>
-                        </div>
-                    </div>
-                    <button onclick="handleUpload()" class="w-full py-4 bg-slate-900 text-white font-bold rounded-xl mt-8">发布图书到云端</button>
-                </div>
-            </section>
-
-            <!-- 个人中心 (借阅历史) -->
-            <section id="tab-profile" class="tab-content hidden">
-                <h2 class="text-3xl font-black text-slate-800 mb-8">借阅历史</h2>
-                <div id="loan-list" class="space-y-4">
-                    <!-- 借阅记录动态加载 -->
-                </div>
-            </section>
-        </main>
-
-        <!-- 移动端导航 (Mobile Only) -->
-        <nav class="mobile-nav">
-            <div onclick="switchTab('catalog')" class="mobile-nav-item active" id="m-nav-catalog">
-                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
-                <span>馆藏</span>
-            </div>
-            <div onclick="switchTab('admin')" class="mobile-nav-item hidden" id="m-nav-admin">
-                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4"></path></svg>
-                <span>管理</span>
-            </div>
-            <div onclick="switchTab('profile')" class="mobile-nav-item" id="m-nav-profile">
-                <svg class="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
-                <span>我的</span>
-            </div>
-        </nav>
-    </div>
-
-    <!-- 弹窗组件 -->
-    <div id="toast" class="fixed top-10 left-1/2 -translate-x-1/2 px-6 py-3 bg-slate-900 text-white rounded-full text-sm font-bold shadow-xl opacity-0 transition-all pointer-events-none z-[100]"></div>
-
-    <!-- Firebase SDK -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, query, onSnapshot, updateDoc, arrayUnion } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // 1. 初始化配置 (由环境提供)
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-        // 2. 本地全局状态
-        let currentUser = null;
-        let isRegisterMode = false;
-        let booksData = [];
-        let uploadImageData = null;
-
-        // 3. 核心身份验证逻辑
-        window.handleAuth = async () => {
-            const acc = document.getElementById('auth-acc').value;
-            const pw = document.getElementById('auth-pw').value;
-            if (!acc || !pw) return showToast("请填写完整信息");
-
-            try {
-                // 首先我们需要一个底层的Firebase Auth会话
-                if (!auth.currentUser) {
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                }
-
-                const userDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', acc);
-                const userSnap = await getDoc(userDocRef);
-
-                if (isRegisterMode) {
-                    if (userSnap.exists()) return showToast("账号已存在");
-                    const newUser = { account: acc, password: pw, name: '用户' + acc.slice(-4), role: 'READER', joined: Date.now() };
-                    await setDoc(userDocRef, newUser);
-                    showToast("注册成功！自动登录...");
-                    loginSuccess(newUser);
-                } else {
-                    if (!userSnap.exists() || userSnap.data().password !== pw) return showToast("账号或密码错误");
-                    loginSuccess(userSnap.data());
-                }
-            } catch (err) {
-                console.error(err);
-                showToast("连接失败，请检查网络");
-            }
+        // 图标组件
+        const Icon = ({ name, size = 18, className = "" }) => {
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         };
 
-        function loginSuccess(userData) {
-            currentUser = userData;
-            localStorage.setItem('LOGGED_USER', JSON.stringify(userData));
-            document.getElementById('auth-screen').style.display = 'none';
-            document.getElementById('app-screen').classList.remove('hidden');
-            document.getElementById('user-name').innerText = userData.name;
-            
-            if (userData.role === 'ADMIN' || userData.account === '18723992791') {
-                document.getElementById('nav-admin').classList.remove('hidden');
-                document.getElementById('m-nav-admin').classList.remove('hidden');
-            }
-            initDataListeners();
-        }
+        const DB_KEY = "THU_LIB_V3";
 
-        window.logout = () => {
-            localStorage.removeItem('LOGGED_USER');
-            location.reload();
+        // 初始数据
+        const INITIAL_DB = {
+            users: [
+                { id: '18723992791', account: '18723992791', password: 'rqy18723992791', role: 'ADMIN', name: '系统管理员' }
+            ],
+            books: [
+                { id: 'B1', isbn: '9787302423287', title: '深度学习入门', author: '斋藤康毅', category: '人工智能', total: 10, available: 8, location: '理科馆 3F', cover: 'https://img3.doubanio.com/view/subject/l/public/s29822180.jpg' },
+                { id: 'B2', isbn: '9787121362392', title: '计算机网络核心技术', author: '谢希仁', category: '网络', total: 5, available: 2, location: '文科馆 2F', cover: 'https://img2.doubanio.com/view/subject/l/public/s29505500.jpg' }
+            ],
+            borrowings: []
         };
 
-        // 4. 云端数据监听 (保证多端同步)
-        function initDataListeners() {
-            // 监听图书
-            const qBooks = collection(db, 'artifacts', appId, 'public', 'data', 'books');
-            onSnapshot(qBooks, (snapshot) => {
-                booksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                renderBooks();
-            }, (err) => console.error("Books error:", err));
+        function App() {
+            const [user, setUser] = useState(() => JSON.parse(localStorage.getItem("USER_SESSION")));
+            const [db, setDb] = useState(() => {
+                const saved = localStorage.getItem(DB_KEY);
+                return saved ? JSON.parse(saved) : INITIAL_DB;
+            });
 
-            // 监听个人借阅
-            const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', currentUser.account);
-            onSnapshot(userRef, (snapshot) => {
-                if (snapshot.exists()) {
-                    const data = snapshot.data();
-                    renderLoans(data.loans || []);
-                }
-            }, (err) => console.error("User sync error:", err));
-        }
+            useEffect(() => {
+                localStorage.setItem(DB_KEY, JSON.stringify(db));
+            }, [db]);
 
-        // 5. 业务功能：图书入库 (含图片)
-        window.previewImage = (input) => {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                uploadImageData = e.target.result;
-                const preview = document.getElementById('image-preview');
-                preview.innerHTML = `<img src="${uploadImageData}" class="w-full h-full object-cover">`;
+            const login = (u) => {
+                setUser(u);
+                localStorage.setItem("USER_SESSION", JSON.stringify(u));
             };
-            if (input.files[0]) reader.readAsDataURL(input.files[0]);
-        };
 
-        window.handleUpload = async () => {
-            const title = document.getElementById('in-title').value;
-            const author = document.getElementById('in-author').value;
-            const stock = parseInt(document.getElementById('in-stock').value);
+            const logout = () => {
+                setUser(null);
+                localStorage.removeItem("USER_SESSION");
+            };
 
-            if (!title || !uploadImageData) return showToast("请填写书名并上传照片");
+            return (
+                <div className="min-h-screen">
+                    {user ? (
+                        <Dashboard user={user} db={db} setDb={setDb} onLogout={logout} />
+                    ) : (
+                        <LoginPage onLogin={login} db={db} />
+                    )}
+                </div>
+            );
+        }
 
-            try {
-                const bookId = "book_" + Date.now();
-                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'books', bookId), {
-                    title, author, stock, available: stock, image: uploadImageData, createdAt: Date.now()
-                });
-                showToast("云端入库成功！");
-                switchTab('catalog');
-                // 清空表单
-                document.getElementById('in-title').value = '';
-                document.getElementById('in-author').value = '';
-                document.getElementById('image-preview').innerHTML = '<span class="text-slate-400 text-xs font-bold">点击选择照片</span>';
-                uploadImageData = null;
-            } catch (err) {
-                showToast("入库失败");
-            }
-        };
+        // --- 登录页面 ---
+        function LoginPage({ onLogin, db }) {
+            const [acc, setAcc] = useState('');
+            const [pw, setPw] = useState('');
 
-        // 6. 业务功能：借阅逻辑
-        window.borrowBook = async (bookId) => {
-            const book = booksData.find(b => b.id === bookId);
-            if (!book || book.available <= 0) return showToast("库存不足");
-
-            try {
-                // 1. 更新图书库存
-                const bookRef = doc(db, 'artifacts', appId, 'public', 'data', 'books', bookId);
-                await updateDoc(bookRef, { available: book.available - 1 });
-
-                // 2. 更新用户借阅历史
-                const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', currentUser.account);
-                await updateDoc(userRef, {
-                    loans: arrayUnion({
-                        bookId,
-                        title: book.title,
-                        date: new Date().toLocaleDateString(),
-                        status: '借阅中'
-                    })
-                });
-                showToast(`《${book.title}》借阅成功`);
-            } catch (err) {
-                showToast("借阅操作失败");
-            }
-        };
-
-        // 7. UI 渲染逻辑
-        window.renderBooks = () => {
-            const grid = document.getElementById('book-grid');
-            const kw = document.getElementById('search-input').value.toLowerCase();
-            grid.innerHTML = '';
-
-            const filtered = booksData.filter(b => b.title.toLowerCase().includes(kw) || b.author.toLowerCase().includes(kw));
-
-            filtered.forEach(book => {
-                const div = document.createElement('div');
-                div.className = "book-card bg-white rounded-2xl md:rounded-3xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-slate-100";
-                div.innerHTML = `
-                    <div class="aspect-[3/4] bg-slate-100 relative">
-                        <img src="${book.image}" class="w-full h-full object-cover">
-                        <div class="absolute top-2 right-2 px-2 py-1 bg-black/50 backdrop-blur-md text-[10px] text-white rounded-lg font-bold">
-                            余 ${book.available}
+            return (
+                <div className="h-screen flex items-center justify-center bg-slate-900 relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-full opacity-30">
+                        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-purple-600 blur-[120px] rounded-full"></div>
+                        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-blue-600 blur-[120px] rounded-full"></div>
+                    </div>
+                    <div className="w-[400px] p-10 glass rounded-[2.5rem] shadow-2xl relative z-10">
+                        <div className="text-center mb-10">
+                            <h1 className="text-3xl font-black tracking-tighter text-slate-800">THU-LIB 系统</h1>
+                            <p className="text-slate-400 text-sm mt-2">数字化馆藏资源管理门户</p>
+                        </div>
+                        <div className="space-y-4">
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">账号</label>
+                                <input value={acc} onChange={e=>setAcc(e.target.value)} className="w-full p-4 bg-slate-100 rounded-2xl border-none outline-none focus:ring-2 ring-purple-500 transition-all" placeholder="输入学号/工号" />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">密码</label>
+                                <input type="password" value={pw} onChange={e=>setPw(e.target.value)} className="w-full p-4 bg-slate-100 rounded-2xl border-none outline-none focus:ring-2 ring-purple-500 transition-all" placeholder="请输入密码" />
+                            </div>
+                            <button onClick={()=>{
+                                const found = db.users.find(u => u.account === acc && u.password === pw);
+                                if(found) onLogin(found); else alert("验证失败");
+                            }} className="w-full py-4 thu-purple text-white rounded-2xl font-bold shadow-xl shadow-purple-200 mt-6 hover:scale-[1.02] active:scale-95 transition-all">
+                                立即进入系统
+                            </button>
                         </div>
                     </div>
-                    <div class="p-3 md:p-5">
-                        <h3 class="font-bold text-slate-800 text-sm md:text-base truncate">${book.title}</h3>
-                        <p class="text-[10px] md:text-xs text-slate-400 mt-1">${book.author}</p>
-                        <button onclick="borrowBook('${book.id}')" class="w-full mt-3 py-2 md:py-3 bg-indigo-50 text-indigo-600 text-[10px] md:text-xs font-black rounded-xl hover:bg-indigo-600 hover:text-white transition-all">
-                            立即借阅
-                        </button>
-                    </div>
-                `;
-                grid.appendChild(div);
-            });
-        };
-
-        window.renderLoans = (loans) => {
-            const list = document.getElementById('loan-list');
-            list.innerHTML = loans.length ? '' : '<div class="p-20 text-center text-slate-300 font-bold">暂无借阅记录</div>';
-            
-            [...loans].reverse().forEach(loan => {
-                const item = document.createElement('div');
-                item.className = "bg-white p-5 rounded-2xl flex items-center justify-between shadow-sm border border-slate-100";
-                item.innerHTML = `
-                    <div>
-                        <h4 class="font-bold text-slate-800">${loan.title}</h4>
-                        <p class="text-xs text-slate-400 mt-1">借阅日期: ${loan.date}</p>
-                    </div>
-                    <span class="px-3 py-1 bg-green-50 text-green-600 text-[10px] font-black rounded-full uppercase">${loan.status}</span>
-                `;
-                list.appendChild(item);
-            });
-        };
-
-        // 8. 辅助函数
-        window.switchTab = (tabId) => {
-            document.querySelectorAll('.tab-content').forEach(s => s.classList.add('hidden'));
-            document.getElementById('tab-' + tabId).classList.remove('hidden');
-            
-            // 更新导航高亮 (桌面)
-            document.querySelectorAll('.sidebar button').forEach(b => b.classList.remove('bg-indigo-600'));
-            document.getElementById('nav-' + tabId)?.classList.add('bg-indigo-600');
-            
-            // 更新导航高亮 (移动)
-            document.querySelectorAll('.mobile-nav-item').forEach(i => i.classList.remove('active'));
-            document.getElementById('m-nav-' + tabId)?.classList.add('active');
-        };
-
-        window.toggleAuthMode = () => {
-            isRegisterMode = !isRegisterMode;
-            document.getElementById('auth-title').innerText = isRegisterMode ? "新用户注册" : "欢迎回来";
-            document.getElementById('auth-subtitle').innerText = isRegisterMode ? "创建一个云端图书馆账号" : "请输入您的账号访问图书馆";
-            document.getElementById('auth-btn').innerText = isRegisterMode ? "立即注册" : "登录系统";
-            document.getElementById('auth-switch').innerText = isRegisterMode ? "已有账号？去登录" : "还没有账号？立即注册";
-        };
-
-        window.showToast = (msg) => {
-            const t = document.getElementById('toast');
-            t.innerText = msg;
-            t.classList.remove('opacity-0', '-translate-y-5');
-            setTimeout(() => t.classList.add('opacity-0', '-translate-y-5'), 2000);
-        };
-
-        // 9. 启动检查
-        const cached = localStorage.getItem('LOGGED_USER');
-        if (cached) {
-            loginSuccess(JSON.parse(cached));
+                </div>
+            );
         }
+
+        // --- 主仪表盘 ---
+        function Dashboard({ user, db, setDb, onLogout }) {
+            const [view, setView] = useState(user.role === 'ADMIN' ? 'admin_home' : 'reader_home');
+            const [search, setSearch] = useState('');
+
+            const filteredBooks = db.books.filter(b => b.title.includes(search) || b.isbn.includes(search));
+
+            const borrowBook = (book) => {
+                if(book.available <= 0) return alert("暂无库存");
+                const newBooks = db.books.map(b => b.id === book.id ? {...b, available: b.available - 1} : b);
+                const newBorrow = {
+                    id: Date.now(),
+                    userId: user.id,
+                    bookTitle: book.title,
+                    date: new Date().toLocaleDateString(),
+                    due: '2024-05-12' // 演示数据
+                };
+                setDb({...db, books: newBooks, borrowings: [newBorrow, ...db.borrowings]});
+                alert("预约成功！请在 24 小时内到馆取书。");
+            };
+
+            return (
+                <div className="flex h-screen overflow-hidden">
+                    {/* 侧边导航 */}
+                    <aside className="w-72 border-r bg-white p-8 flex flex-col">
+                        <div className="flex items-center gap-3 mb-12">
+                            <div className="w-10 h-10 thu-purple rounded-xl flex items-center justify-center text-white shadow-lg shadow-purple-200">
+                                <Icon name="library" size={20} />
+                            </div>
+                            <h2 className="text-xl font-black tracking-tighter">THU-LIB</h2>
+                        </div>
+
+                        <div className="flex-1 space-y-2">
+                            <NavBtn icon="home" label="系统首页" active={view.includes('home')} onClick={()=>setView(user.role === 'ADMIN' ? 'admin_home' : 'reader_home')} />
+                            <NavBtn icon="search" label="图书检索" active={view === 'search'} onClick={()=>setView('search')} />
+                            <NavBtn icon="bookmark" label="我的借阅" active={view === 'my'} onClick={()=>setView('my')} />
+                            {user.role === 'ADMIN' && (
+                                <div className="mt-8 pt-8 border-t border-slate-100">
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-4 px-4 tracking-widest">管理功能</p>
+                                    <NavBtn icon="plus-circle" label="图书入库" active={view === 'add'} onClick={()=>setView('add')} />
+                                    <NavBtn icon="users" label="读者管理" active={view === 'users'} onClick={()=>setView('users')} />
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="mt-auto pt-8 border-t">
+                            <div className="flex items-center gap-3 mb-6 px-4">
+                                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-bold text-purple-600 border border-purple-100">{user.name[0]}</div>
+                                <div className="min-w-0">
+                                    <p className="text-sm font-bold truncate">{user.name}</p>
+                                    <p className="text-[10px] text-slate-400 font-medium tracking-tight uppercase">{user.role}</p>
+                                </div>
+                            </div>
+                            <button onClick={onLogout} className="w-full py-3 bg-red-50 text-red-500 rounded-xl text-xs font-bold hover:bg-red-100 transition-colors">安全登出</button>
+                        </div>
+                    </aside>
+
+                    {/* 主内容 */}
+                    <main className="flex-1 overflow-y-auto bg-slate-50 p-12">
+                        {view === 'reader_home' && <ReaderHome db={db} setView={setView} />}
+                        {view === 'admin_home' && <AdminHome db={db} />}
+                        {view === 'search' && <SearchView books={filteredBooks} onBorrow={borrowBook} search={search} setSearch={setSearch} />}
+                        {view === 'my' && <MyBorrowings borrowings={db.borrowings} userId={user.id} />}
+                        {view === 'add' && <AddBook db={db} setDb={setDb} />}
+                    </main>
+                </div>
+            );
+        }
+
+        // --- 读者首页组件 ---
+        function ReaderHome({ db, setView }) {
+            return (
+                <div className="animate-in">
+                    <div className="thu-purple p-12 rounded-[3rem] text-white relative overflow-hidden mb-12 shadow-2xl shadow-purple-200">
+                        <div className="relative z-10">
+                            <h2 className="text-4xl font-black mb-4 tracking-tighter">下午好，同学</h2>
+                            <p className="text-purple-100 max-w-md leading-relaxed opacity-80">
+                                “书山有路勤为径，学海无涯苦作舟。” <br/>
+                                您当前有 0 本逾期图书，2 本正在借阅中。
+                            </p>
+                            <button onClick={()=>setView('search')} className="mt-8 px-8 py-3 bg-white text-purple-600 rounded-xl font-bold text-sm hover:scale-105 transition-transform">立即找书</button>
+                        </div>
+                        <Icon name="book-open" size={200} className="absolute right-[-20px] bottom-[-40px] opacity-10" />
+                    </div>
+
+                    <h3 className="text-2xl font-black mb-8 px-2 flex items-center gap-3">
+                        <div className="w-2 h-8 bg-purple-600 rounded-full"></div>
+                        新书速递
+                    </h3>
+                    <div className="grid grid-cols-4 gap-8">
+                        {db.books.map(b => (
+                            <div key={b.id} className="book-card bg-white p-5 rounded-[2rem] border border-slate-100 transition-all cursor-pointer">
+                                <img src={b.cover} className="w-full aspect-[3/4] rounded-2xl object-cover mb-4 shadow-md" />
+                                <h4 className="font-bold text-slate-800 truncate">{b.title}</h4>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">{b.author}</p>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 图书检索视图 ---
+        function SearchView({ books, onBorrow, search, setSearch }) {
+            return (
+                <div className="animate-in">
+                    <div className="relative mb-10">
+                        <Icon name="search" className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="输入书名、作者或 ISBN 搜索馆藏..." className="w-full pl-16 pr-8 py-5 bg-white rounded-3xl border-none shadow-sm focus:ring-4 ring-purple-100 outline-none text-lg transition-all" />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-6">
+                        {books.map(b => (
+                            <div key={b.id} className="bg-white p-6 rounded-[2.5rem] flex gap-6 border border-slate-100 hover:shadow-xl transition-all">
+                                <img src={b.cover} className="w-32 h-44 rounded-2xl object-cover shadow-sm" />
+                                <div className="flex-1 py-2 flex flex-col">
+                                    <div className="px-3 py-1 bg-slate-100 text-slate-500 rounded-full text-[10px] font-bold w-fit mb-2">{b.category}</div>
+                                    <h4 className="text-xl font-black text-slate-800 leading-tight mb-2">{b.title}</h4>
+                                    <p className="text-sm text-slate-400 mb-4">{b.author} · {b.location}</p>
+                                    <div className="mt-auto flex items-center justify-between">
+                                        <span className={`text-sm font-bold ${b.available > 0 ? 'text-green-500' : 'text-red-400'}`}>
+                                            {b.available > 0 ? `馆藏 ${b.available} 本` : '暂时借罄'}
+                                        </span>
+                                        <button onClick={()=>onBorrow(b)} disabled={b.available === 0} className="px-6 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold disabled:bg-slate-200 transition-all active:scale-95 shadow-lg shadow-purple-100">预约</button>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 借阅历史 ---
+        function MyBorrowings({ borrowings, userId }) {
+            const mine = borrowings.filter(b => b.userId === userId);
+            return (
+                <div className="animate-in">
+                    <h2 className="text-3xl font-black mb-10">我的借阅清单</h2>
+                    <div className="space-y-4">
+                        {mine.length === 0 ? (
+                            <div className="py-20 text-center bg-white rounded-[3rem] border-2 border-dashed border-slate-200">
+                                <Icon name="coffee" size={40} className="mx-auto text-slate-300 mb-4" />
+                                <p className="text-slate-400 font-medium">暂时没有在借图书，去书海走走吧！</p>
+                            </div>
+                        ) : (
+                            mine.map(m => (
+                                <div key={m.id} className="bg-white p-6 rounded-3xl border border-slate-100 flex items-center justify-between shadow-sm">
+                                    <div className="flex items-center gap-4">
+                                        <div className="w-12 h-12 bg-purple-50 text-purple-600 rounded-2xl flex items-center justify-center">
+                                            <Icon name="book" />
+                                        </div>
+                                        <div>
+                                            <h5 className="font-bold text-slate-800">{m.bookTitle}</h5>
+                                            <p className="text-[10px] text-slate-400 font-medium uppercase tracking-tighter">借阅于 {m.date} · 应还日期 {m.due}</p>
+                                        </div>
+                                    </div>
+                                    <span className="px-4 py-1.5 bg-green-50 text-green-600 rounded-full text-[10px] font-black uppercase tracking-widest">在借中</span>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 管理员首页组件 ---
+        function AdminHome({ db }) {
+            const stats = [
+                { label: '在馆书本', val: db.books.reduce((a, b) => a + b.total, 0), icon: 'book' },
+                { label: '活跃读者', val: db.users.length, icon: 'users' },
+                { label: '今日流通', val: db.borrowings.length, icon: 'repeat' }
+            ];
+            return (
+                <div className="animate-in">
+                    <h2 className="text-3xl font-black mb-10">系统管理全景</h2>
+                    <div className="grid grid-cols-3 gap-8 mb-12">
+                        {stats.map(s => (
+                            <div key={s.label} className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-purple-600"><Icon name={s.icon} /></div>
+                                    <span className="text-4xl font-black text-slate-800 tracking-tighter">{s.val}</span>
+                                </div>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">{s.label}</p>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="bg-white rounded-[3rem] p-10 shadow-sm border border-slate-100">
+                        <h3 className="text-xl font-black mb-8">馆藏库动态</h3>
+                        <div className="space-y-4">
+                            {db.books.map(b => (
+                                <div key={b.id} className="flex items-center justify-between py-4 border-b last:border-0 border-slate-50">
+                                    <div className="flex items-center gap-4">
+                                        <div className="w-10 h-14 bg-slate-50 rounded-lg overflow-hidden border">
+                                            <img src={b.cover} className="w-full h-full object-cover" />
+                                        </div>
+                                        <p className="font-bold text-sm">{b.title}</p>
+                                    </div>
+                                    <div className="flex items-center gap-8">
+                                        <div className="w-32 bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                            <div className="h-full bg-purple-600" style={{ width: `${(b.available/b.total)*100}%` }}></div>
+                                        </div>
+                                        <span className="text-[10px] font-bold text-slate-500 w-12">{b.available} / {b.total}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 入库组件 ---
+        function AddBook({ db, setDb }) {
+            const [f, setF] = useState({ title: '', isbn: '', author: '', category: '通用', total: 5, cover: '', location: '' });
+            
+            const submit = (e) => {
+                e.preventDefault();
+                const newBook = { ...f, id: 'B' + Date.now(), available: parseInt(f.total), total: parseInt(f.total) };
+                setDb({ ...db, books: [newBook, ...db.books] });
+                alert("录入成功！");
+                setF({ title: '', isbn: '', author: '', category: '通用', total: 5, cover: '', location: '' });
+            };
+
+            return (
+                <div className="max-w-2xl mx-auto animate-in">
+                    <h2 className="text-3xl font-black mb-10 text-center">新书入库编目</h2>
+                    <form onSubmit={submit} className="bg-white p-10 rounded-[3rem] shadow-xl border border-slate-100 grid grid-cols-2 gap-6">
+                        <Field label="书名" value={f.title} onChange={v=>setF({...f, title: v})} />
+                        <Field label="ISBN" value={f.isbn} onChange={v=>setF({...f, isbn: v})} />
+                        <Field label="作者" value={f.author} onChange={v=>setF({...f, author: v})} />
+                        <Field label="分类" value={f.category} onChange={v=>setF({...f, category: v})} />
+                        <Field label="架位" value={f.location} onChange={v=>setF({...f, location: v})} placeholder="如: 3F-A1" />
+                        <Field label="数量" type="number" value={f.total} onChange={v=>setF({...f, total: v})} />
+                        <div className="col-span-2">
+                            <Field label="封面图片 URL" value={f.cover} onChange={v=>setF({...f, cover: v})} placeholder="https://..." />
+                        </div>
+                        <button className="col-span-2 py-4 thu-purple text-white rounded-2xl font-bold mt-4 shadow-lg shadow-purple-100 active:scale-95 transition-all">确认入库并分编</button>
+                    </form>
+                </div>
+            );
+        }
+
+        // --- 辅助小组件 ---
+        const NavBtn = ({ icon, label, active, onClick }) => (
+            <button onClick={onClick} className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl font-bold transition-all ${active ? 'bg-purple-600 text-white shadow-lg shadow-purple-100 translate-x-1' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-800'}`}>
+                <Icon name={icon} size={20} />
+                <span className="text-sm">{label}</span>
+            </button>
+        );
+
+        const Field = ({ label, value, onChange, type="text", placeholder }) => (
+            <div className="space-y-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">{label}</label>
+                <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} className="w-full p-3.5 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 ring-purple-500 outline-none transition-all" required />
+            </div>
+        );
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
     </script>
 </body>
 </html>

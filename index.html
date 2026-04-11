@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>学院图书数字化管理平台</title>
+    <!-- 核心依赖：React, Babel, Tailwind CSS -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 图标库 -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @keyframes progress {
+            0% { width: 0%; }
+            100% { width: 100%; }
+        }
+        .animate-progress {
+            animation: progress 0.8s ease-in-out forwards;
+        }
+        body { font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // 模拟 Lucide 图标组件占位 (由于CDN加载方式不同，我们手动实现图标显示)
+        const Icon = ({ name, size = 18, className = "" }) => {
+            useEffect(() => {
+                if (window.lucide) window.lucide.createIcons();
+            }, [name]);
+            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
+        };
+
+        const APP_CONFIG = {
+            APP_NAME: "学院图书数字化管理平台",
+            SMS_COOLDOWN: 60,
+            VERSION: "v2.0.0-Final"
+        };
+
+        const INITIAL_DB = {
+            users: [
+                { id: 'ADMIN001', account: 'admin', password: 'password123', role: 'SUPER_ADMIN', name: '系统管理员', status: '正常' },
+                { id: 'LIB001', account: 'librarian', password: 'password123', role: 'LIBRARIAN', name: '陈馆长', status: '正常' },
+                { id: '2024001', account: '13800138000', password: 'password123', role: 'READER', name: '张同学', status: '正常', phone: '13800138000', email: 'zhang@univ.edu', borrowed: 2 }
+            ],
+            books: [
+                { id: 'B001', isbn: '9787111532644', title: '深入理解计算机系统', author: 'Randal E.Bryant', press: '机械工业出版社', category: '计算机', stock: 10, available: 8, total: 10, price: 139, location: 'A-1-203' },
+                { id: 'B002', isbn: '9787121362217', title: '重构：改善既有代码的设计', author: 'Martin Fowler', press: '电子工业出版社', category: '计算机', stock: 5, available: 5, total: 5, price: 168, location: 'A-2-105' }
+            ],
+            logs: []
+        };
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [view, setView] = useState('login'); 
+            const [db, setDb] = useState(INITIAL_DB);
+            const [isInitializing, setIsInitializing] = useState(true);
+
+            useEffect(() => {
+                setTimeout(() => setIsInitializing(false), 800);
+            }, []);
+
+            const handleLoginSuccess = (userData) => {
+                setUser(userData);
+                setView('app');
+            };
+
+            const handleLogout = () => {
+                setUser(null);
+                setView('login');
+            };
+
+            if (isInitializing) return (
+                <div className="h-screen w-full flex flex-col items-center justify-center bg-white">
+                    <div className="p-4 bg-indigo-600 rounded-2xl mb-4 text-white">
+                        <Icon name="library" size={40} />
+                    </div>
+                    <div className="w-48 h-1 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-indigo-600 animate-progress"></div>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="h-screen w-full">
+                    {user && view === 'app' ? (
+                        <MainDashboard user={user} db={db} setDb={setDb} onLogout={handleLogout} />
+                    ) : (
+                        <AuthGateway view={view} setView={setView} db={db} setDb={setDb} onLoginSuccess={handleLoginSuccess} />
+                    )}
+                </div>
+            );
+        }
+
+        // --- 认证组件 ---
+        function AuthGateway({ view, setView, db, setDb, onLoginSuccess }) {
+            return (
+                <div className="h-screen w-full flex bg-white overflow-hidden">
+                    <div className="hidden md:flex md:w-1/2 bg-slate-900 relative items-center justify-center p-12 text-white">
+                        <div className="relative z-10 space-y-6">
+                            <div className="inline-flex items-center space-x-2 px-3 py-1 bg-indigo-500/20 rounded-full border border-indigo-500/30">
+                                <Icon name="shield-check" size={16} className="text-indigo-400" />
+                                <span className="text-[10px] font-bold text-indigo-200 uppercase tracking-widest">全链路实名准入</span>
+                            </div>
+                            <h1 className="text-4xl font-black">{APP_CONFIG.APP_NAME}</h1>
+                            <p className="text-slate-400 italic">"数字化时代的知识管理中枢"</p>
+                        </div>
+                    </div>
+                    <div className="flex-1 flex flex-col items-center justify-center p-8 bg-slate-50">
+                        <div className="w-full max-w-[400px]">
+                            {view === 'login' ? (
+                                <LoginForm db={db} onLoginSuccess={onLoginSuccess} onSwitch={() => setView('register')} />
+                            ) : (
+                                <RegisterForm db={db} setDb={setDb} onBack={() => setView('login')} />
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function LoginForm({ db, onLoginSuccess, onSwitch }) {
+            const [account, setAccount] = useState('');
+            const [password, setPassword] = useState('');
+            const [error, setError] = useState('');
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                const found = db.users.find(u => (u.account === account || u.id === account) && u.password === password);
+                if (found) onLoginSuccess(found);
+                else setError("账号或密码错误");
+            };
+
+            return (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-black text-slate-800">系统登录</h2>
+                    <form onSubmit={handleSubmit} className="space-y-4">
+                        <Input label="账号" value={account} onChange={setAccount} placeholder="学号/工号" icon="user" />
+                        <Input label="密码" value={password} onChange={setPassword} placeholder="请输入密码" type="password" icon="lock" />
+                        {error && <div className="text-red-500 text-xs font-bold">{error}</div>}
+                        <button className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">进入系统</button>
+                    </form>
+                    <button onClick={onSwitch} className="text-sm text-indigo-600 font-bold hover:underline">没有账号？立即注册</button>
+                </div>
+            );
+        }
+
+        function RegisterForm({ db, setDb, onBack }) {
+            const [form, setForm] = useState({ id: '', name: '', phone: '', code: '', password: '' });
+            const [cooldown, setCooldown] = useState(0);
+
+            const handleReg = (e) => {
+                e.preventDefault();
+                const newUser = { ...form, account: form.phone, role: 'READER', status: '正常' };
+                setDb({ ...db, users: [...db.users, newUser] });
+                alert('注册成功！');
+                onBack();
+            };
+
+            return (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-black text-slate-800">读者注册</h2>
+                    <form onSubmit={handleReg} className="space-y-4">
+                        <Input label="学号" value={form.id} onChange={v => setForm({...form, id: v})} icon="id-card" />
+                        <Input label="姓名" value={form.name} onChange={v => setForm({...form, name: v})} icon="user" />
+                        <div className="flex items-end space-x-2">
+                            <div className="flex-1"><Input label="手机号" value={form.phone} onChange={v => setForm({...form, phone: v})} icon="smartphone" /></div>
+                            <button type="button" onClick={() => {setCooldown(60); alert('验证码: 888888')}} className="h-[46px] px-4 border rounded-xl text-xs font-bold bg-white">获取码</button>
+                        </div>
+                        <Input label="验证码" value={form.code} onChange={v => setForm({...form, code: v})} placeholder="888888" icon="key" />
+                        <Input label="设置密码" type="password" value={form.password} onChange={v => setForm({...form, password: v})} icon="lock" />
+                        <button className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold">提交注册</button>
+                    </form>
+                    <button onClick={onBack} className="text-sm text-slate-500 font-bold">返回登录</button>
+                </div>
+            );
+        }
+
+        // --- 主界面 ---
+        function MainDashboard({ user, db, setDb, onLogout }) {
+            const [activeTab, setActiveTab] = useState('inventory');
+            
+            const menu = [
+                { id: 'inventory', label: '图书入库', icon: 'package-plus', roles: ['SUPER_ADMIN', 'LIBRARIAN'] },
+                { id: 'books', label: '图书档案', icon: 'book-open', roles: ['SUPER_ADMIN', 'LIBRARIAN', 'READER'] },
+                { id: 'users', label: '读者管理', icon: 'users', roles: ['SUPER_ADMIN', 'LIBRARIAN'] }
+            ].filter(m => m.roles.includes(user.role));
+
+            return (
+                <div className="flex h-full w-full">
+                    <aside className="w-64 bg-slate-900 text-white flex flex-col p-4">
+                        <div className="flex items-center space-x-2 px-4 py-6 border-b border-slate-800 mb-4">
+                            <Icon name="library" className="text-indigo-500" />
+                            <span className="font-black">LIB-SYSTEM</span>
+                        </div>
+                        <nav className="flex-1 space-y-1">
+                            {menu.map(item => (
+                                <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl ${activeTab === item.id ? 'bg-indigo-600' : 'text-slate-400 hover:bg-slate-800'}`}>
+                                    <Icon name={item.icon} size={18} />
+                                    <span className="text-sm font-bold">{item.label}</span>
+                                </button>
+                            ))}
+                        </nav>
+                        <div className="p-4 bg-slate-800 rounded-xl">
+                            <div className="text-xs font-bold truncate">{user.name}</div>
+                            <div className="text-[10px] text-slate-500 mb-3">{user.role}</div>
+                            <button onClick={onLogout} className="w-full py-2 bg-red-500/20 text-red-400 rounded-lg text-[10px] font-bold">安全退出</button>
+                        </div>
+                    </aside>
+                    <main className="flex-1 bg-slate-50 overflow-auto p-8">
+                        {activeTab === 'inventory' && <InventoryView db={db} setDb={setDb} user={user} />}
+                        {activeTab === 'books' && <BooksView db={db} />}
+                        {activeTab === 'users' && <ReadersView db={db} />}
+                    </main>
+                </div>
+            );
+        }
+
+        // --- 业务子组件 ---
+        function InventoryView({ db, setDb, user }) {
+            const [isbn, setIsbn] = useState('');
+            const [form, setForm] = useState({ title: '', author: '', count: 1 });
+
+            const handleInbound = () => {
+                const newBook = { id: Date.now(), isbn, ...form, total: form.count, available: form.count };
+                setDb({ ...db, books: [newBook, ...db.books], logs: [{ id: Date.now(), title: form.title, count: form.count, time: new Date().toLocaleString() }, ...db.logs] });
+                alert('入库成功');
+            };
+
+            return (
+                <div className="max-w-2xl bg-white p-8 rounded-3xl border shadow-sm space-y-6">
+                    <h2 className="text-xl font-black">图书入库手续</h2>
+                    <div className="space-y-4">
+                        <Input label="ISBN" value={isbn} onChange={setIsbn} placeholder="扫描或输入ISBN" icon="barcode" />
+                        <Input label="书名" value={form.title} onChange={v => setForm({...form, title: v})} icon="type" />
+                        <Input label="作者" value={form.author} onChange={v => setForm({...form, author: v})} icon="user" />
+                        <Input label="数量" type="number" value={form.count} onChange={v => setForm({...form, count: v})} icon="hash" />
+                        <button onClick={handleInbound} className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-100">提交入库</button>
+                    </div>
+                </div>
+            );
+        }
+
+        function BooksView({ db }) {
+            return (
+                <div className="bg-white rounded-2xl border overflow-hidden">
+                    <table className="w-full text-left text-sm">
+                        <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase">
+                            <tr><th className="px-6 py-4">书名/ISBN</th><th className="px-6 py-4">库存/可借</th></tr>
+                        </thead>
+                        <tbody className="divide-y">
+                            {db.books.map(b => (
+                                <tr key={b.id} className="hover:bg-slate-50">
+                                    <td className="px-6 py-4"><div className="font-bold">{b.title}</div><div className="text-[10px] text-slate-400">{b.isbn}</div></td>
+                                    <td className="px-6 py-4">{b.total} / <span className="text-indigo-600 font-bold">{b.available}</span></td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            );
+        }
+
+        function ReadersView({ db }) {
+            return (
+                <div className="bg-white rounded-2xl border overflow-hidden">
+                    <table className="w-full text-left text-sm">
+                        <thead className="bg-slate-50 border-b text-[10px] font-bold text-slate-400 uppercase">
+                            <tr><th className="px-6 py-4">读者姓名/ID</th><th className="px-6 py-4">手机号</th><th className="px-6 py-4">状态</th></tr>
+                        </thead>
+                        <tbody className="divide-y">
+                            {db.users.filter(u => u.role === 'READER').map(u => (
+                                <tr key={u.id}>
+                                    <td className="px-6 py-4"><div className="font-bold">{u.name}</div><div className="text-[10px] text-slate-400">{u.id}</div></td>
+                                    <td className="px-6 py-4 text-xs">{u.phone || '未关联'}</td>
+                                    <td className="px-6 py-4 text-green-600 font-bold text-[10px]">{u.status}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            );
+        }
+
+        function Input({ label, value, onChange, placeholder, type="text", icon }) {
+            return (
+                <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase">{label}</label>
+                    <div className="relative">
+                        {icon && <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"><Icon name={icon} size={16} /></div>}
+                        <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className={`w-full py-2.5 ${icon?'pl-10':'px-4'} bg-slate-50 border rounded-xl text-sm focus:border-indigo-600 outline-none`} />
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

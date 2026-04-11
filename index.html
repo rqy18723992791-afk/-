@@ -1,339 +1,304 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" translate="no">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>智慧图书馆 - 增强兼容版</title>
-    <!-- 基础依赖库 -->
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="google" content="notranslate">
+    <title>智慧图书馆数字化管理平台</title>
+    <!-- 使用高度兼容的Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        body { font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif; }
-        .academic-bg { background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); }
-        .loading-ring { border: 4px solid #e2e8f0; border-top: 4px solid #4f46e5; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        /* 强制防止翻译引起的UI崩溃 */
+        .notranslate { translate: no !important; }
+        body { -webkit-tap-highlight-color: transparent; font-family: system-ui, -apple-system, sans-serif; }
+        
+        /* 隐藏滚动条但保留功能 */
+        ::-webkit-scrollbar { width: 0px; background: transparent; }
+
+        /* 移动端特殊样式 */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                width: 100% !important;
+                height: 60px !important;
+                flex-direction: row !important;
+                padding: 0 !important;
+                z-index: 1000;
+                border-top: 1px solid rgba(255,255,255,0.1);
+            }
+            .sidebar-header { display: none; }
+            .nav-container { display: flex; width: 100%; justify-content: space-around; align-items: center; }
+            .nav-item { margin-bottom: 0 !important; font-size: 12px; padding: 10px !important; flex: 1; text-align: center; }
+            .content { padding: 20px 20px 80px 20px !important; }
+            .user-profile { display: none !important; }
+            .login-card { margin: 20px; border-radius: 16px; }
+        }
     </style>
 </head>
-<body class="bg-slate-50">
-    <div id="root"></div>
+<body class="bg-slate-50 text-slate-900 overflow-hidden">
 
-    <script type="module">
-        // 尝试导入 Firebase，如果失败则走本地模式
-        let firebaseApp, auth, db_fs, initialized = false;
+    <!-- 登录视图 -->
+    <div id="login-screen" class="h-screen w-full flex items-center justify-center bg-gradient-to-br from-indigo-600 to-purple-700">
+        <div class="login-card bg-white p-8 md:p-10 shadow-2xl w-full max-w-md text-center">
+            <div class="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <div class="w-8 h-8 bg-indigo-600 rounded-lg"></div>
+            </div>
+            <h2 class="text-2xl font-bold text-slate-800 mb-2">智慧图书馆</h2>
+            <p class="text-slate-400 text-sm mb-8">数字化管理系统 V3.0</p>
+            
+            <div class="space-y-4 text-left">
+                <div>
+                    <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">管理账号</label>
+                    <input type="text" id="login-acc" value="18723992791" class="w-full p-4 bg-slate-50 rounded-xl border-2 border-transparent focus:border-indigo-500 outline-none transition-all">
+                </div>
+                <div>
+                    <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">访问密码</label>
+                    <input type="password" id="login-pw" value="rqy18723992791" class="w-full p-4 bg-slate-50 rounded-xl border-2 border-transparent focus:border-indigo-500 outline-none transition-all">
+                </div>
+            </div>
+            
+            <button onclick="handleLogin()" class="w-full mt-8 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95">
+                进入系统
+            </button>
+            <p id="login-msg" class="text-red-500 text-xs mt-4 h-4"></p>
+        </div>
+    </div>
 
-        try {
-            const fbApp = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js");
-            const fbAuth = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js");
-            const fbFS = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+    <!-- 主程序视图 -->
+    <div id="main-screen" class="hidden h-screen flex flex-col md:flex-row">
+        <!-- 侧边栏/移动端底栏 -->
+        <div class="sidebar w-64 bg-slate-900 text-white flex flex-col p-6">
+            <div class="sidebar-header flex items-center gap-3 mb-10">
+                <div class="w-8 h-8 bg-indigo-500 rounded-lg"></div>
+                <span class="font-black tracking-tight text-xl">DIGITAL LIB</span>
+            </div>
+            
+            <nav class="nav-container space-y-2">
+                <div id="nav-catalog" onclick="switchTab('catalog')" class="nav-item p-4 rounded-xl cursor-pointer hover:bg-white/10 transition-all font-bold active bg-indigo-600">馆藏检索</div>
+                <div id="admin-menu" class="hidden space-y-2">
+                    <div id="nav-inventory" onclick="switchTab('inventory')" class="nav-item p-4 rounded-xl cursor-pointer hover:bg-white/10 transition-all font-bold">图书入库</div>
+                </div>
+                <div id="nav-loans" onclick="switchTab('loans')" class="nav-item p-4 rounded-xl cursor-pointer hover:bg-white/10 transition-all font-bold">我的借阅</div>
+            </nav>
 
-            if (typeof __firebase_config !== 'undefined') {
-                const config = JSON.parse(__firebase_config);
-                firebaseApp = fbApp.initializeApp(config);
-                auth = fbAuth.getAuth(firebaseApp);
-                db_fs = fbFS.getFirestore(firebaseApp);
-                
-                // 暴露必要的函数给全局或 React
-                window.fbTools = { ...fbAuth, ...fbFS };
-                initialized = true;
-            }
-        } catch (e) {
-            console.warn("云端模式初始化失败，切换为本地离线模式:", e);
-        }
+            <div class="user-profile mt-auto pt-6 border-t border-white/10">
+                <div id="user-display-name" class="font-bold text-sm">加载中...</div>
+                <div id="user-display-role" class="text-[10px] text-slate-500 mb-4 uppercase font-black">USER</div>
+                <button onclick="handleLogout()" class="text-rose-400 text-xs font-bold hover:text-rose-300">安全退出系统</button>
+            </div>
+        </div>
 
-        const { useState, useEffect } = React;
+        <!-- 内容区 -->
+        <main class="content flex-1 bg-slate-50 overflow-y-auto p-6 md:p-12">
+            <!-- 馆藏检索 -->
+            <section id="tab-catalog" class="tab-content">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+                    <h1 class="text-3xl font-black text-slate-800">全部馆藏</h1>
+                    <div class="relative">
+                        <input type="text" id="search-box" oninput="renderCatalog()" placeholder="搜索书名、作者..." class="w-full md:w-80 p-4 bg-white shadow-sm rounded-2xl border-none outline-none focus:ring-2 ring-indigo-500/20 font-medium">
+                    </div>
+                </div>
+                <div id="book-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                    <!-- 书籍卡片动态插入 -->
+                </div>
+            </section>
 
-        // 图标组件
-        const Icon = ({ name, size = 18, className = "" }) => {
-            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
-            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
+            <!-- 图书入库 -->
+            <section id="tab-inventory" class="tab-content hidden">
+                <h1 class="text-3xl font-black text-slate-800 mb-8">新书入库</h1>
+                <div class="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 max-w-xl">
+                    <div class="space-y-4">
+                        <div><label class="text-[10px] font-bold text-slate-400 uppercase ml-1">书名</label><input type="text" id="add-title" class="w-full p-4 bg-slate-50 rounded-xl outline-none border-2 border-transparent focus:border-indigo-500"></div>
+                        <div><label class="text-[10px] font-bold text-slate-400 uppercase ml-1">作者</label><input type="text" id="add-author" class="w-full p-4 bg-slate-50 rounded-xl outline-none border-2 border-transparent focus:border-indigo-500"></div>
+                        <div><label class="text-[10px] font-bold text-slate-400 uppercase ml-1">初始库存</label><input type="number" id="add-stock" value="1" class="w-full p-4 bg-slate-50 rounded-xl outline-none border-2 border-transparent focus:border-indigo-500"></div>
+                        <button onclick="addBook()" class="w-full py-4 bg-slate-900 text-white font-bold rounded-xl mt-4">确认入库</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 我的借阅 -->
+            <section id="tab-loans" class="tab-content hidden">
+                <h1 class="text-3xl font-black text-slate-800 mb-8">我的借阅</h1>
+                <div class="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left">
+                            <thead class="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
+                                <tr><th class="p-6">图书详情</th><th class="p-6">借阅时间</th><th class="p-6">状态</th></tr>
+                            </thead>
+                            <tbody id="loan-body" class="divide-y divide-slate-50">
+                                <!-- 借阅记录动态插入 -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="no-loans" class="p-20 text-center text-slate-300 font-bold hidden">暂无借阅记录</div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        // 系统状态与初始数据
+        let state = {
+            user: null,
+            books: [
+                { id: 1, title: '深入理解计算机系统', author: 'R.E.B', isbn: '9787111', stock: 10, available: 8 },
+                { id: 2, title: 'JavaScript 高级程序设计', author: 'Nicholas', isbn: '9787115', stock: 5, available: 5 },
+                { id: 3, title: '算法导论', author: 'Cormen', isbn: '97871114', stock: 3, available: 1 }
+            ],
+            loans: [],
+            users: [
+                { account: '18723992791', password: 'rqy18723992791', name: '系统管理员', role: 'ADMIN' }
+            ]
         };
 
-        function App() {
-            const [user, setUser] = useState(null);
-            const [view, setView] = useState('login');
-            const [libData, setLibData] = useState({ users: [], books: [], loans: [] });
-            const [loading, setLoading] = useState(true);
-            const [mode, setMode] = useState('Checking...');
-
-            // 初始化数据
-            useEffect(() => {
-                const startApp = async () => {
-                    if (initialized && auth) {
-                        setMode('Cloud');
-                        // 云端逻辑
-                        try {
-                            const { signInAnonymously, onAuthStateChanged } = window.fbTools;
-                            await signInAnonymously(auth);
-                            
-                            const appId = typeof __app_id !== 'undefined' ? __app_id : 'lib-app-v2';
-                            const { doc, onSnapshot, setDoc } = window.fbTools;
-                            const dataRef = doc(db_fs, 'artifacts', appId, 'public', 'data');
-                            
-                            onSnapshot(dataRef, (snap) => {
-                                if (snap.exists()) {
-                                    setLibData(snap.data());
-                                } else {
-                                    const init = { users: [{ id: 'ADMIN001', account: '18723992791', password: 'rqy18723992791', role: 'SUPER_ADMIN', name: '系统管理员', status: '正常' }], books: [], loans: [] };
-                                    setDoc(dataRef, init);
-                                    setLibData(init);
-                                }
-                                setLoading(false);
-                            });
-                        } catch (err) {
-                            switchToLocal();
-                        }
-                    } else {
-                        switchToLocal();
-                    }
-                };
-
-                const switchToLocal = () => {
-                    setMode('Local');
-                    const local = localStorage.getItem('LIB_LOCAL_BACKUP');
-                    if (local) {
-                        setLibData(JSON.parse(local));
-                    } else {
-                        setLibData({
-                            users: [{ id: 'ADMIN001', account: '18723992791', password: 'rqy18723992791', role: 'SUPER_ADMIN', name: '系统管理员', status: '正常' }],
-                            books: [],
-                            loans: []
-                        });
-                    }
-                    setLoading(false);
-                };
-
-                startApp();
-
-                const session = localStorage.getItem('LIB_SESSION');
-                if (session) setUser(JSON.parse(session));
-            }, []);
-
-            const syncData = async (newData) => {
-                setLibData(newData);
-                localStorage.setItem('LIB_LOCAL_BACKUP', JSON.stringify(newData));
-                if (initialized && mode === 'Cloud') {
-                    const appId = typeof __app_id !== 'undefined' ? __app_id : 'lib-app-v2';
-                    const { doc, setDoc } = window.fbTools;
-                    await setDoc(doc(db_fs, 'artifacts', appId, 'public', 'data'), newData);
-                }
-            };
-
-            const handleLogin = (u) => {
-                setUser(u);
-                localStorage.setItem('LIB_SESSION', JSON.stringify(u));
-                setView('app');
-            };
-
-            if (loading) return (
-                <div className="h-screen flex flex-col items-center justify-center bg-slate-50">
-                    <div className="loading-ring mb-4"></div>
-                    <p className="text-slate-400 font-bold text-sm">正在加载图书馆系统...</p>
-                </div>
-            );
-
-            return (
-                <div className="h-screen w-full">
-                    {user && view === 'app' ? (
-                        <Dashboard user={user} db={libData} sync={syncData} onLogout={() => { setUser(null); localStorage.removeItem('LIB_SESSION'); }} mode={mode} />
-                    ) : (
-                        <Auth db={libData} onLogin={handleLogin} sync={syncData} />
-                    )}
-                </div>
-            );
+        // 数据持久化
+        const DB_KEY = 'LIB_V3_STORAGE';
+        function save() { localStorage.setItem(DB_KEY, JSON.stringify(state)); }
+        function load() {
+            const data = localStorage.getItem(DB_KEY);
+            if (data) state = JSON.parse(data);
+            const session = localStorage.getItem('LIB_SESSION');
+            if (session) {
+                state.user = JSON.parse(session);
+                showApp();
+            }
         }
 
-        // --- 登录/注册 ---
-        function Auth({ db, onLogin, sync }) {
-            const [isLogin, setIsLogin] = useState(true);
-            const [form, setForm] = useState({ acc: '', pw: '', name: '', id: '' });
+        // 登录
+        function handleLogin() {
+            const acc = document.getElementById('login-acc').value;
+            const pw = document.getElementById('login-pw').value;
+            const msg = document.getElementById('login-msg');
 
-            const handleSubmit = (e) => {
-                e.preventDefault();
-                if (isLogin) {
-                    const found = db.users.find(u => (u.account === form.acc || u.id === form.acc) && u.password === form.pw);
-                    if (found) onLogin(found);
-                    else alert('账号或密码错误');
-                } else {
-                    if (db.users.find(u => u.id === form.id)) return alert('学号已存在');
-                    const newUser = { ...form, account: form.acc, role: 'READER', status: '正常' };
-                    sync({ ...db, users: [...db.users, newUser] });
-                    alert('注册成功');
-                    setIsLogin(true);
-                }
-            };
-
-            return (
-                <div className="h-screen flex items-center justify-center academic-bg p-6">
-                    <div className="bg-white p-10 rounded-[2.5rem] shadow-2xl w-full max-w-md">
-                        <div className="text-center mb-8">
-                            <div className="w-16 h-16 bg-indigo-600 rounded-3xl mx-auto flex items-center justify-center text-white mb-4 shadow-xl shadow-indigo-100">
-                                <Icon name="library" size={32} />
-                            </div>
-                            <h2 className="text-2xl font-black text-slate-800">智慧图书馆平台</h2>
-                        </div>
-                        <form onSubmit={handleSubmit} className="space-y-4">
-                            {!isLogin && (
-                                <div className="grid grid-cols-2 gap-3">
-                                    <input className="bg-slate-50 p-4 rounded-2xl outline-none text-sm w-full" placeholder="姓名" required onChange={e=>setForm({...form, name:e.target.value})} />
-                                    <input className="bg-slate-50 p-4 rounded-2xl outline-none text-sm w-full" placeholder="学号" required onChange={e=>setForm({...form, id:e.target.value})} />
-                                </div>
-                            )}
-                            <input className="bg-slate-50 p-4 rounded-2xl outline-none text-sm w-full" placeholder="账号/手机" required onChange={e=>setForm({...form, acc:e.target.value})} />
-                            <input className="bg-slate-50 p-4 rounded-2xl outline-none text-sm w-full" type="password" placeholder="密码" required onChange={e=>setForm({...form, pw:e.target.value})} />
-                            <button className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-100">{isLogin ? '登录' : '注册'}</button>
-                        </form>
-                        <button onClick={() => setIsLogin(!isLogin)} className="w-full mt-6 text-xs text-slate-400 font-bold uppercase tracking-widest">{isLogin ? '新读者注册' : '返回登录'}</button>
-                    </div>
-                </div>
-            );
+            const found = state.users.find(u => u.account === acc && u.password === pw);
+            if (found) {
+                state.user = found;
+                localStorage.setItem('LIB_SESSION', JSON.stringify(found));
+                showApp();
+            } else {
+                msg.innerText = "账号或密码错误";
+            }
         }
 
-        // --- 主面板 ---
-        function Dashboard({ user, db, sync, onLogout, mode }) {
-            const [tab, setTab] = useState(user.role.includes('ADMIN') ? 'inventory' : 'catalog');
+        function handleLogout() {
+            localStorage.removeItem('LIB_SESSION');
+            location.reload();
+        }
+
+        // 导航切换
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.getElementById('tab-' + tabId).classList.remove('hidden');
             
-            return (
-                <div className="flex h-full">
-                    <aside className="w-64 bg-slate-900 text-white flex flex-col p-6">
-                        <div className="font-black text-xl mb-10 flex items-center gap-2">
-                            <Icon name="library" className="text-indigo-500" /> 智慧系统
-                        </div>
-                        <div className="flex-1 space-y-2">
-                            <MenuBtn active={tab === 'catalog'} onClick={()=>setTab('catalog')} icon="search" label="馆藏查询" />
-                            {user.role.includes('ADMIN') && <MenuBtn active={tab === 'inventory'} onClick={()=>setTab('inventory')} icon="plus-circle" label="图书入库" />}
-                            <MenuBtn active={tab === 'loans'} onClick={()=>setTab('loans')} icon="book-open" label={user.role.includes('ADMIN') ? '借阅管理' : '我的借阅'} />
-                        </div>
-                        <div className="bg-slate-800 p-4 rounded-2xl mt-auto">
-                            <div className="text-xs font-bold mb-1">{user.name}</div>
-                            <div className="text-[10px] text-slate-500 uppercase font-black mb-4">{mode} MODE</div>
-                            <button onClick={onLogout} className="text-[10px] font-black text-red-400 uppercase">退出登录</button>
-                        </div>
-                    </aside>
-                    <main className="flex-1 overflow-auto p-10">
-                        {tab === 'catalog' && <Catalog db={db} user={user} sync={sync} />}
-                        {tab === 'inventory' && <Inventory db={db} sync={sync} />}
-                        {tab === 'loans' && <Loans db={db} user={user} sync={sync} />}
-                    </main>
-                </div>
-            );
+            document.querySelectorAll('.nav-item').forEach(el => {
+                el.classList.remove('bg-indigo-600', 'active');
+            });
+            document.getElementById('nav-' + tabId).classList.add('bg-indigo-600', 'active');
+
+            if (tabId === 'catalog') renderCatalog();
+            if (tabId === 'loans') renderLoans();
         }
 
-        function MenuBtn({ active, onClick, icon, label }) {
-            return (
-                <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${active ? 'bg-indigo-600' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>
-                    <Icon name={icon} size={18} /> {label}
-                </button>
-            );
-        }
-
-        // --- 模块: 入库 ---
-        function Inventory({ db, sync }) {
-            const [f, setF] = useState({ title: '', author: '', isbn: '', stock: 1, cover: '' });
+        function showApp() {
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('main-screen').classList.remove('hidden');
+            document.getElementById('user-display-name').innerText = state.user.name;
+            document.getElementById('user-display-role').innerText = state.user.role === 'ADMIN' ? 'Administrator' : 'Reader';
             
-            const handleAdd = () => {
-                if(!f.title || !f.isbn) return alert('请填写书名和ISBN');
-                const newB = { ...f, id: 'B'+Date.now(), available: parseInt(f.stock), stock: parseInt(f.stock) };
-                sync({ ...db, books: [newB, ...db.books] });
-                alert('入库成功');
-                setF({ title: '', author: '', isbn: '', stock: 1, cover: '' });
-            };
+            if (state.user.role === 'ADMIN') {
+                document.getElementById('admin-menu').classList.remove('hidden');
+            }
+            renderCatalog();
+        }
 
-            return (
-                <div className="max-w-2xl bg-white p-10 rounded-[2.5rem] shadow-sm border border-slate-100 animate-in slide-in-from-bottom-4 duration-500">
-                    <h2 className="text-2xl font-black mb-8 italic">New Book Entry</h2>
-                    <div className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                            <Input label="ISBN" value={f.isbn} onChange={v=>setF({...f, isbn:v})} />
-                            <Input label="库存数量" type="number" value={f.stock} onChange={v=>setF({...f, stock:v})} />
+        // 业务：渲染书籍卡片
+        function renderCatalog() {
+            const grid = document.getElementById('book-grid');
+            const kw = document.getElementById('search-box').value.toLowerCase();
+            grid.innerHTML = '';
+
+            state.books.filter(b => b.title.toLowerCase().includes(kw)).forEach(book => {
+                const card = document.createElement('div');
+                card.className = "bg-white p-6 rounded-3xl shadow-sm border border-slate-100 hover:shadow-xl hover:shadow-indigo-500/5 transition-all group";
+                card.innerHTML = `
+                    <div class="h-40 bg-slate-50 rounded-2xl mb-4 flex items-center justify-center group-hover:bg-indigo-50 transition-colors">
+                        <div class="w-12 h-16 bg-white shadow-sm border border-slate-100 rounded flex flex-col p-2 gap-1">
+                            <div class="h-1 w-full bg-slate-100"></div>
+                            <div class="h-1 w-2/3 bg-slate-100"></div>
                         </div>
-                        <Input label="图书名称" value={f.title} onChange={v=>setF({...f, title:v})} />
-                        <Input label="作者" value={f.author} onChange={v=>setF({...f, author:v})} />
-                        <div className="pt-4">
-                            <button onClick={handleAdd} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg shadow-indigo-100">确认入库</button>
-                        </div>
                     </div>
-                </div>
-            );
-        }
-
-        // --- 模块: 查询 ---
-        function Catalog({ db, user, sync }) {
-            const [q, setQ] = useState('');
-            const list = db.books.filter(b => b.title.includes(q) || b.author.includes(q));
-
-            const borrow = (book) => {
-                if(book.available <= 0) return alert('无库存');
-                const loan = { id: 'L'+Date.now(), bookId: book.id, title: book.title, userId: user.id, date: new Date().toLocaleDateString(), status: 'ACTIVE' };
-                const books = db.books.map(b => b.id === book.id ? { ...b, available: b.available - 1 } : b);
-                sync({ ...db, books, loans: [loan, ...db.loans] });
-                alert('借阅成功');
-            };
-
-            return (
-                <div className="space-y-6">
-                    <div className="bg-white p-2 rounded-2xl shadow-sm border border-slate-100 flex items-center px-4">
-                        <Icon name="search" className="text-slate-300" />
-                        <input className="flex-1 p-4 outline-none font-bold text-slate-700" placeholder="快速检索书名或作者..." onChange={e=>setQ(e.target.value)} />
+                    <h3 class="font-bold text-slate-800 mb-1 truncate">${book.title}</h3>
+                    <p class="text-xs text-slate-400 mb-4">${book.author}</p>
+                    <div class="flex items-center justify-between">
+                        <span class="px-3 py-1 bg-green-50 text-green-600 text-[10px] font-black rounded-full">
+                            余 ${book.available}
+                        </span>
+                        <button onclick="borrowBook(${book.id})" class="text-xs font-bold text-indigo-600 hover:text-indigo-800">立即借阅 →</button>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {list.map(b => (
-                            <div key={b.id} className="bg-white p-6 rounded-3xl border border-slate-100 flex gap-4 hover:shadow-lg transition-all">
-                                <div className="w-20 h-28 bg-slate-50 rounded-xl flex items-center justify-center shrink-0">
-                                    <Icon name="book" className="text-slate-200" size={32} />
-                                </div>
-                                <div className="flex-1 flex flex-col justify-between">
-                                    <div>
-                                        <div className="font-black text-slate-800">{b.title}</div>
-                                        <div className="text-xs text-slate-400 font-bold">{b.author}</div>
-                                    </div>
-                                    <div className="flex items-center justify-between mt-4">
-                                        <div className="text-[10px] font-black uppercase text-indigo-500">余量: {b.available}/{b.stock}</div>
-                                        {user.role === 'READER' && <button onClick={()=>borrow(b)} className="px-4 py-1.5 bg-slate-900 text-white rounded-lg text-[10px] font-black uppercase tracking-widest">借阅</button>}
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            );
+                `;
+                grid.appendChild(card);
+            });
         }
 
-        function Loans({ db, user, sync }) {
-            const my = user.role.includes('ADMIN') ? db.loans : db.loans.filter(l => l.userId === user.id);
-            return (
-                <div className="bg-white rounded-3xl border border-slate-100 overflow-hidden">
-                    <table className="w-full text-left">
-                        <thead className="bg-slate-50 text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                            <tr><th className="p-6">图书</th><th className="p-6">日期</th><th className="p-6">状态</th></tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50">
-                            {my.map(l => (
-                                <tr key={l.id} className="text-sm">
-                                    <td className="p-6 font-bold">{l.title}</td>
-                                    <td className="p-6 text-slate-400">{l.date}</td>
-                                    <td className="p-6 text-green-500 font-black text-xs uppercase">{l.status}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            );
+        // 业务：借书
+        function borrowBook(id) {
+            const book = state.books.find(b => b.id === id);
+            if (book.available <= 0) return alert('库存不足');
+            
+            book.available--;
+            state.loans.unshift({
+                id: Date.now(),
+                title: book.title,
+                date: new Date().toLocaleDateString(),
+                status: '借阅中'
+            });
+            save();
+            alert(`《${book.title}》借阅成功！`);
+            renderCatalog();
         }
 
-        function Input({ label, value, onChange, type="text" }) {
-            return (
-                <div className="space-y-1">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{label}</label>
-                    <input type={type} value={value} onChange={e=>onChange(e.target.value)} className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm focus:ring-2 ring-indigo-500/20" />
-                </div>
-            );
+        // 业务：入库
+        function addBook() {
+            const t = document.getElementById('add-title').value;
+            const a = document.getElementById('add-author').value;
+            const s = parseInt(document.getElementById('add-stock').value);
+
+            if (!t) return alert('请填写书名');
+            
+            state.books.unshift({ id: Date.now(), title: t, author: a, stock: s, available: s });
+            save();
+            alert('新书入库成功！');
+            switchTab('catalog');
+            document.getElementById('add-title').value = '';
         }
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        // 业务：借阅记录
+        function renderLoans() {
+            const body = document.getElementById('loan-body');
+            const empty = document.getElementById('no-loans');
+            body.innerHTML = '';
+            
+            if (state.loans.length === 0) {
+                empty.classList.remove('hidden');
+            } else {
+                empty.classList.add('hidden');
+                state.loans.forEach(l => {
+                    const tr = document.createElement('tr');
+                    tr.className = "text-sm";
+                    tr.innerHTML = `
+                        <td class="p-6 font-bold text-slate-700">${l.title}</td>
+                        <td class="p-6 text-slate-400 text-xs">${l.date}</td>
+                        <td class="p-6"><span class="text-green-500 font-black text-[10px] uppercase">${l.status}</span></td>
+                    `;
+                    body.appendChild(tr);
+                });
+            }
+        }
+
+        // 初始化
+        window.onload = load;
     </script>
 </body>
 </html>

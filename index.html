@@ -65,7 +65,7 @@
             const title = '📚 新读者注册通知';
             const content =
                 `读者姓名：${reader.name}\n` +
-                `邮箱账号：${reader.account}\n` +
+                `手机号：${reader.account}\n` +
                 `院系/部门：${reader.department}\n` +
                 `读者类型：${READER_TYPES[reader.readerType]?.label || '未知'}\n` +
                 `注册时间：${new Date().toLocaleString('zh-CN')}`;
@@ -103,7 +103,7 @@
                 readerType: u.user_metadata?.readerType || 'UNDERGRAD',
                 role: u.user_metadata?.role || 'READER',
                 status: 'ACTIVE',
-                phone: u.phone || ''
+                phone: u.phone || u.user_metadata?.phone || ''
             };
         }
 
@@ -113,23 +113,61 @@
             const [authReady, setAuthReady] = useState(false);
             const [db, setDb] = useState({ users: [], books: [], borrowings: [] });
 
-            // Supabase Auth 监听（兼容管理员本地 Session）
+            // Supabase Auth 监听（兼容管理员本地 Session 与手机验证码登录）
             useEffect(() => {
+                let cancelled = false;
                 const localSession = localStorage.getItem("USER_SESSION");
-                supabase.auth.getSession().then(({ data: { session } }) => {
-                    const supabaseUser = buildUser(session);
-                    if (supabaseUser) {
-                        setUser(supabaseUser);
-                    } else if (localSession) {
+                // 安全超时：5 秒后无论结果如何都结束 loading
+                const safetyTimer = setTimeout(() => {
+                    if (!cancelled) {
+                        if (localSession) {
+                            try {
+                                const parsed = JSON.parse(localSession);
+                                setUser(parsed);
+                            } catch(e) { localStorage.removeItem("USER_SESSION"); }
+                        }
+                        setAuthReady(true);
+                    }
+                }, 5000);
+
+                try {
+                    supabase.auth.getSession().then(({ data: { session } }) => {
+                        if (cancelled) return;
+                        clearTimeout(safetyTimer);
+                        const supabaseUser = buildUser(session);
+                        if (supabaseUser) {
+                            setUser(supabaseUser);
+                        } else if (localSession) {
+                            try {
+                                const parsed = JSON.parse(localSession);
+                                if ((parsed.role === 'ADMIN' && parsed.id === '18723992791') || parsed.is_admin === true) {
+                                    setUser(parsed);
+                                }
+                            } catch(e) { localStorage.removeItem("USER_SESSION"); }
+                        }
+                        setAuthReady(true);
+                    }).catch(() => {
+                        if (cancelled) return;
+                        clearTimeout(safetyTimer);
+                        if (localSession) {
+                            try {
+                                const parsed = JSON.parse(localSession);
+                                setUser(parsed);
+                            } catch(e) { localStorage.removeItem("USER_SESSION"); }
+                        }
+                        setAuthReady(true);
+                    });
+                } catch(e) {
+                    clearTimeout(safetyTimer);
+                    if (localSession) {
                         try {
                             const parsed = JSON.parse(localSession);
-                            if (parsed.role === 'ADMIN' && parsed.id === '18723992791') {
-                                setUser(parsed);
-                            }
-                        } catch(e) { localStorage.removeItem("USER_SESSION"); }
+                            setUser(parsed);
+                        } catch(_) { localStorage.removeItem("USER_SESSION"); }
                     }
                     setAuthReady(true);
-                });
+                }
+
                 const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
                     const u = buildUser(session);
                     if (u) {
@@ -140,8 +178,8 @@
                         if (local) {
                             try {
                                 const parsed = JSON.parse(local);
-                                if (parsed.role === 'ADMIN' && parsed.id === '18723992791') {
-                                    return; // 管理员本地 Session 不受 Supabase 空 Session 影响
+                                if ((parsed.role === 'ADMIN' && parsed.id === '18723992791') || parsed.is_admin === true) {
+                                    return;
                                 }
                             } catch(e) {}
                         }
@@ -149,7 +187,11 @@
                         localStorage.removeItem("USER_SESSION");
                     }
                 });
-                return () => subscription.unsubscribe();
+                return () => {
+                    cancelled = true;
+                    clearTimeout(safetyTimer);
+                    subscription.unsubscribe();
+                };
             }, []);
 
             // 加载图书
@@ -201,6 +243,7 @@
             };
 
             const handleGuestLogin = () => {
+                const guestToken = 'gt_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 10);
                 const guestUser = {
                     id: 'guest_' + Date.now(),
                     account: 'guest',
@@ -210,8 +253,11 @@
                     readerType: 'GUEST',
                     role: 'GUEST',
                     status: 'ACTIVE',
-                    phone: ''
+                    phone: '',
+                    guest_token: guestToken,
+                    is_admin: false
                 };
+                localStorage.setItem("USER_SESSION", JSON.stringify(guestUser));
                 setUser(guestUser);
             };
 
@@ -237,23 +283,198 @@
             );
         }
 
+        // ======================== 短信发送（调用 Supabase Edge Function） ========================
+        async function generateAndSendCode(phone) {
+            try {
+                const { data, error } = await supabase.functions.invoke('send-sms', {
+                    body: { phone: phone.trim().replace(/\s+/g, '') }
+                });
+                if (error) return { success: false, code: error.message || '短信发送失败' };
+                if (data && data.success) return { success: true };
+                return { success: false, code: (data && data.error) || '短信发送失败' };
+            } catch(e) {
+                return { success: false, code: '网络异常，请稍后重试' };
+            }
+        }
+
+        // 验证码校验（仅查询 Supabase，不涉及短信密钥）
+        async function verifySMSCode(phone, code) {
+            const { data, error } = await supabase.from('otp_codes')
+                .select('*').eq('phone', phone).eq('code', code).maybeSingle();
+            if (error || !data) return false;
+            if (new Date(data.expires_at) < new Date()) return false;
+            await supabase.from('otp_codes').delete().eq('phone', phone);
+            return true;
+        }
+
         // ======================== LoginPage ========================
         function LoginPage({ db, setDb, onGuestLogin }) {
             const [mode, setMode] = useState('login'); // 'login' | 'register'
             const [adminMode, setAdminMode] = useState(false);
-            const [form, setForm] = useState({ email: '', pw: '', name: '', dept: '', type: 'UNDERGRAD' });
+            const [form, setForm] = useState({ phone: '', name: '', dept: '', type: 'UNDERGRAD', pw: '' });
+            const [step, setStep] = useState('phone'); // 'phone' | 'code' | 'success'
+            const [code, setCode] = useState(['', '', '', '', '', '']);
             const [loading, setLoading] = useState(false);
             const [msg, setMsg] = useState(null);
-            const [otpStage, setOtpStage] = useState(null); // null | 'sending' | 'sent' | 'verifying' | 'success'
-            const [otp, setOtp] = useState(['', '', '', '', '', '']);
-            const [otpErr, setOtpErr] = useState('');
+            const [codeErr, setCodeErr] = useState('');
+            const [countdown, setCountdown] = useState(0);
             const otpRefs = [useRef(null), useRef(null), useRef(null), useRef(null), useRef(null), useRef(null)];
 
-            const handleLogin = async () => {
-                if (!form.email || !form.pw) return setMsg({ type: 'warn', text: '请填写邮箱和密码' });
+            // 倒计时
+            useEffect(() => {
+                if (countdown > 0) {
+                    const t = setTimeout(() => setCountdown(c => c - 1), 1000);
+                    return () => clearTimeout(t);
+                }
+            }, [countdown]);
 
-                // 硬编码唯一管理员：本地验证绕过 Supabase Auth
-                if (form.email === '18723992791' && form.pw === 'rqy18723992791') {
+            const handleSendCode = async () => {
+                const phone = form.phone.trim().replace(/\s+/g, '');
+                if (!/^1[3-9]\d{9}$/.test(phone)) return setMsg({ type: 'warn', text: '请输入有效的11位手机号' });
+                // 管理员拦截
+                if (phone === '18723992791' && !adminMode) return setMsg({ type: 'err', text: '该手机号为受保护的系统账号' });
+
+                setLoading(true); setMsg(null);
+                try {
+                    const result = await generateAndSendCode(phone);
+                    if (result.success) {
+                        setMsg({ type: 'ok', text: '验证码已发送至 ' + phone + '，5 分钟内有效' });
+                        setStep('code');
+                        setCountdown(60);
+                        setTimeout(() => otpRefs[0].current?.focus(), 150);
+                    } else {
+                        setMsg({ type: 'err', text: '发送失败：' + (result.code || '请检查手机号或稍后重试') });
+                    }
+                } catch(e) {
+                    setMsg({ type: 'err', text: '发送异常：' + e.message });
+                }
+                setLoading(false);
+            };
+
+            const handleResend = async () => {
+                if (countdown > 0) return;
+                setCode(['', '', '', '', '', '']); setCodeErr('');
+                await handleSendCode();
+            };
+
+            const handleCodeChange = (val, idx) => {
+                const v = val.replace(/\D/g, '').slice(0, 1);
+                const next = [...code]; next[idx] = v;
+                setCode(next); setCodeErr('');
+                if (v && idx < 5) otpRefs[idx + 1].current?.focus();
+            };
+            const handleCodeKey = (e, idx) => {
+                if (e.key === 'Backspace' && !code[idx] && idx > 0) otpRefs[idx - 1].current?.focus();
+            };
+
+            // 登录验证
+            const handleVerifyLogin = async () => {
+                const codeStr = code.join('');
+                if (codeStr.length !== 6) return setCodeErr('请输入完整 6 位验证码');
+                setLoading(true); setCodeErr('');
+                const phone = form.phone.trim();
+
+                const valid = await verifySMSCode(phone, codeStr);
+                if (!valid) { setCodeErr('验证码错误或已过期，请重新获取'); setLoading(false); return; }
+
+                // 查找是否已注册
+                const { data: existing } = await supabase.from('profiles').select('*').eq('phone', phone).maybeSingle();
+                if (existing) {
+                    const sessionUser = {
+                        id: existing.id || ('user_' + phone),
+                        account: phone,
+                        email: existing.email || '',
+                        name: existing.name || '读者' + phone.slice(-4),
+                        department: existing.department || '未知院系',
+                        readerType: existing.reader_type || 'UNDERGRAD',
+                        role: existing.role || 'READER',
+                        status: existing.status || 'ACTIVE',
+                        phone: phone,
+                        is_admin: existing.is_admin || false
+                    };
+                    localStorage.setItem("USER_SESSION", JSON.stringify(sessionUser));
+                    window.location.href = '/';
+                    return;
+                }
+                // 未注册 → 自动创建基础账号
+                const autoUser = {
+                    id: 'phone_' + Date.now(),
+                    account: phone,
+                    email: '',
+                    name: '读者' + phone.slice(-4),
+                    department: '未知院系',
+                    readerType: 'UNDERGRAD',
+                    role: 'READER',
+                    status: 'ACTIVE',
+                    phone: phone,
+                    is_admin: false
+                };
+                await supabase.from('profiles').upsert({
+                    id: autoUser.id,
+                    phone: phone,
+                    name: autoUser.name,
+                    department: autoUser.department,
+                    reader_type: autoUser.readerType,
+                    role: autoUser.role,
+                    status: autoUser.status,
+                    updated_at: new Date().toISOString()
+                });
+                localStorage.setItem("USER_SESSION", JSON.stringify(autoUser));
+                window.location.href = '/';
+            };
+
+            // 注册验证
+            const handleVerifyRegister = async () => {
+                const codeStr = code.join('');
+                if (codeStr.length !== 6) return setCodeErr('请输入完整 6 位验证码');
+                if (!form.name.trim()) return setCodeErr('请先填写姓名后返回获取验证码');
+                setLoading(true); setCodeErr('');
+                const phone = form.phone.trim();
+
+                // 检查是否已注册
+                const { data: dup } = await supabase.from('profiles').select('id').eq('phone', phone).maybeSingle();
+                if (dup) { setCodeErr('该手机号已注册，请直接登录'); setLoading(false); return; }
+
+                const valid = await verifySMSCode(phone, codeStr);
+                if (!valid) { setCodeErr('验证码错误或已过期，请重新获取'); setLoading(false); return; }
+
+                // 创建用户
+                const newUser = {
+                    id: 'phone_' + Date.now(),
+                    account: phone,
+                    email: '',
+                    name: form.name.trim(),
+                    department: form.dept.trim() || '未知院系',
+                    readerType: form.type,
+                    role: 'READER',
+                    status: 'ACTIVE',
+                    phone: phone,
+                    is_admin: false
+                };
+                await supabase.from('profiles').upsert({
+                    id: newUser.id,
+                    phone: phone,
+                    name: newUser.name,
+                    department: newUser.department,
+                    reader_type: newUser.readerType,
+                    role: newUser.role,
+                    status: newUser.status,
+                    updated_at: new Date().toISOString()
+                });
+
+                sendNewReaderNotification({ name: newUser.name, account: phone, department: newUser.department, readerType: newUser.readerType });
+                setStep('success');
+                setMsg({ type: 'ok', text: '注册成功！正在入阁…' });
+                localStorage.setItem("USER_SESSION", JSON.stringify(newUser));
+                setTimeout(() => { window.location.href = '/'; }, 1500);
+            };
+
+            // 管理员登录
+            const handleAdminLogin = () => {
+                const phone = form.phone.trim();
+                const pw = form.pw;
+                if (!phone || !pw) return setMsg({ type: 'warn', text: '请填写手机号和密码' });
+                if (phone === '18723992791' && pw === 'rqy18723992791') {
                     const adminUser = {
                         id: '18723992791',
                         account: '18723992791',
@@ -263,92 +484,30 @@
                         readerType: 'ADMIN',
                         role: 'ADMIN',
                         status: 'ACTIVE',
-                        phone: '18723992791'
+                        phone: '18723992791',
+                        is_admin: true
                     };
                     localStorage.setItem("USER_SESSION", JSON.stringify(adminUser));
                     window.location.href = '/';
-                    return;
-                }
-
-                setLoading(true); setMsg(null);
-                const { error } = await supabase.auth.signInWithPassword({ email: form.email, password: form.pw });
-                if (error) { setMsg({ type: 'err', text: error.message }); setLoading(false); }
-            };
-
-            const handleRegister = async () => {
-                if (!form.email || !form.pw || !form.name) return setMsg({ type: 'warn', text: '请填写必填项' });
-                if (form.pw.length < 6) return setMsg({ type: 'warn', text: '密码至少 6 位' });
-
-                // 拦截受保护的管理员账号
-                if (form.email === '18723992791' || form.name === '18723992791' || form.email.includes('18723992791@')) {
-                    return setMsg({ type: 'err', text: '该账号为受保护的系统账号，禁止注册' });
-                }
-
-                setOtpStage('sending'); setMsg(null);
-                try {
-                    const resp = await fetch(`${SUPABASE_URL}/functions/v1/send-otp`, {
-                        method: 'POST',
-                        headers: { 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ email: form.email })
-                    });
-                    const result = await resp.json();
-                    if (!resp.ok) throw new Error(result.error || '发送失败');
-                    setOtpStage('sent');
-                    setMsg({ type: 'ok', text: '验证码已发送至 ' + form.email + '，5 分钟内有效' });
-                    setTimeout(() => otpRefs[0].current?.focus(), 150);
-                } catch (e) {
-                    setOtpStage(null);
-                    setMsg({ type: 'err', text: '验证码发送失败：' + e.message });
+                } else {
+                    setMsg({ type: 'err', text: '管理员账号或密码错误' });
                 }
             };
 
-            const handleOtpChange = (val, idx) => {
-                const v = val.replace(/\D/g, '').slice(0, 1);
-                const next = [...otp]; next[idx] = v;
-                setOtp(next); setOtpErr('');
-                if (v && idx < 5) otpRefs[idx + 1].current?.focus();
+            const resetForm = (newMode) => {
+                setMode(newMode); setStep('phone'); setMsg(null); setCodeErr('');
+                setCode(['', '', '', '', '', '']); setCountdown(0);
+                setForm({ phone: '', name: '', dept: '', type: 'UNDERGRAD', pw: '' });
             };
-            const handleOtpKey = (e, idx) => {
-                if (e.key === 'Backspace' && !otp[idx] && idx > 0) otpRefs[idx - 1].current?.focus();
-            };
-
-            const handleVerify = async () => {
-                const code = otp.join('');
-                if (code.length !== 6) return setOtpErr('请输入完整 6 位验证码');
-                setOtpStage('verifying'); setOtpErr('');
-                try {
-                    const vResp = await fetch(`${SUPABASE_URL}/functions/v1/verify-otp`, {
-                        method: 'POST',
-                        headers: { 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ email: form.email, code })
-                    });
-                    const vResult = await vResp.json();
-                    if (!vResp.ok) throw new Error(vResult.error || '验证失败');
-
-                    const { error } = await supabase.auth.signUp({
-                        email: form.email,
-                        password: form.pw,
-                        options: { data: { name: form.name, department: form.dept || '未知院系', readerType: form.type } }
-                    });
-                    if (error) throw error;
-
-                    sendNewReaderNotification({ name: form.name, account: form.email, department: form.dept || '未知院系', readerType: form.type });
-                    setOtpStage('success');
-                    setMsg({ type: 'ok', text: '注册成功！正在入阁…' });
-                    setTimeout(() => { window.location.href = '/'; }, 1200);
-                } catch (e) {
-                    setOtpStage('sent');
-                    setOtp(['', '', '', '', '', '']);
-                    setOtpErr(e.message);
-                }
-            };
-
-            const handleResend = () => { setOtp(['', '', '', '', '', '']); setOtpErr(''); handleRegister(); };
 
             const cls = {
                 input: 'w-full p-4 bg-[#faf6f0] border border-[#d4c5b2] rounded-xl outline-none focus:ring-2 ring-[#8b4513]/30 transition-all text-[#2c1810] placeholder-[#b8a99a]',
                 btn: 'w-full py-4 rounded-xl font-bold text-white shadow-lg transition-all active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2',
             };
+            const accentColor = adminMode ? '#660874' : '#b22222';
+            const accentGradient = adminMode
+                ? 'bg-gradient-to-r from-[#660874] to-[#4a0656] shadow-[#660874]/20'
+                : 'bg-gradient-to-r from-[#b22222] to-[#8b1a1a] shadow-[#b22222]/20';
 
             return (
                 <div className="h-screen flex items-center justify-center bg-[#faf6f0] relative overflow-hidden">
@@ -364,7 +523,10 @@
                             <h1 className="text-2xl font-black tracking-widest text-[#2c1810]" style={{ fontFamily: 'serif' }}>小羽书屋</h1>
                             {adminMode && <p className="text-[11px] font-bold text-[#660874] tracking-[0.2em] mt-1">清华大学 · 馆藏管理系统</p>}
                             <p className="text-[#8b7355] text-xs mt-2 tracking-wider">
-                                {otpStage === 'success' ? '验印通过 · 即将入阁' : otpStage === 'sent' || otpStage === 'verifying' ? '验印 · 对证入阁' : mode === 'login' ? '叩门 · 入阁览卷' : '投帖 · 问道登门'}
+                                {step === 'success' ? '验印通过 · 即将入阁'
+                                    : step === 'code' ? '验印 · 对证入阁'
+                                    : mode === 'login' ? (adminMode ? '馆长 · 执钥入阁' : '叩门 · 入阁览卷')
+                                    : '投帖 · 问道登门'}
                             </p>
                         </div>
 
@@ -377,58 +539,69 @@
                             </div>
                         )}
 
-                        {otpStage === 'success' ? (
+                        {step === 'success' ? (
                             <div className="text-center space-y-5 py-6">
                                 <div className="text-4xl">📜</div>
                                 <p className="text-[#2c1810] font-bold text-lg" style={{ fontFamily: 'serif' }}>名帖已投，验印通过</p>
                                 <p className="text-sm text-[#8b7355] leading-relaxed">正在为您打开阁门…</p>
                             </div>
-                        ) : otpStage === 'sent' || otpStage === 'verifying' ? (
+                        ) : step === 'code' ? (
                             <div className="space-y-6">
                                 <p className="text-center text-sm text-[#8b7355] leading-relaxed">
-                                    一封素笺已寄至<br /><span className="font-bold text-[#2c1810]">{form.email}</span><br />请填写笺中六位验印
+                                    短信已发送至<br /><span className="font-bold text-[#2c1810]">{form.phone}</span><br />请输入 6 位验证码
                                 </p>
                                 <div className="flex justify-center gap-2.5">
-                                    {otp.map((d, i) => (
+                                    {code.map((d, i) => (
                                         <input key={i} ref={otpRefs[i]} value={d}
-                                               onChange={e => handleOtpChange(e.target.value, i)}
-                                               onKeyDown={e => handleOtpKey(e, i)} maxLength={1}
+                                               onChange={e => handleCodeChange(e.target.value, i)}
+                                               onKeyDown={e => handleCodeKey(e, i)} maxLength={1}
                                                className="w-12 h-14 text-center text-xl font-black text-[#2c1810] bg-[#faf6f0] border-2 border-[#d4c5b2] rounded-xl outline-none focus:border-[#b22222] focus:ring-2 ring-[#b22222]/20 transition-all"
                                                style={{ fontFamily: 'monospace' }} />
                                     ))}
                                 </div>
-                                {otpErr && (
-                                    <div className="p-3 bg-[#fef2f2] border border-[#fecaca] text-[#991b1b] rounded-xl text-sm text-center font-medium">{otpErr}</div>
+                                {codeErr && (
+                                    <div className="p-3 bg-[#fef2f2] border border-[#fecaca] text-[#991b1b] rounded-xl text-sm text-center font-medium">{codeErr}</div>
                                 )}
-                                <button onClick={handleVerify} disabled={otpStage === 'verifying'}
-                                        className={cls.btn + ' bg-gradient-to-r from-[#b22222] to-[#8b1a1a] shadow-[#b22222]/20'}>
-                                    {otpStage === 'verifying' ? <><Icon name="loader-2" size={18} className="animate-spin" /> 对证中…</> : '验证并完成注册'}
+                                <button onClick={mode === 'login' ? handleVerifyLogin : handleVerifyRegister} disabled={loading}
+                                        className={cls.btn + ' bg-gradient-to-r from-[#2c1810] to-[#4a2c1a] shadow-[#2c1810]/20'}>
+                                    {loading ? <><Icon name="loader-2" size={18} className="animate-spin" /> 验证中…</> : (mode === 'login' ? '验证并登录' : '验证并完成注册')}
                                 </button>
                                 <div className="flex justify-between text-xs">
-                                    <button onClick={handleResend} disabled={otpStage === 'verifying'}
-                                            className="text-[#8b7355] hover:text-[#b22222] transition-colors font-bold">⟳ 重新发送</button>
-                                    <button onClick={() => { setOtpStage(null); setMsg(null); setOtp(['', '', '', '', '', '']); setOtpErr(''); setMode('register'); }}
-                                            className="text-[#8b7355] hover:text-[#2c1810] transition-colors font-bold">← 修改信息</button>
+                                    <button onClick={handleResend} disabled={countdown > 0}
+                                            className={`transition-colors font-bold ${countdown > 0 ? 'text-[#b8a99a] cursor-not-allowed' : 'text-[#8b7355] hover:text-[#b22222]'}`}>
+                                        {countdown > 0 ? `${countdown}s 后重新发送` : '⟳ 重新发送'}
+                                    </button>
+                                    <button onClick={() => { setStep('phone'); setMsg(null); setCode(['', '', '', '', '', '']); setCodeErr(''); setCountdown(0); }}
+                                            className="text-[#8b7355] hover:text-[#2c1810] transition-colors font-bold">← 修改手机号</button>
                                 </div>
                             </div>
                         ) : mode === 'login' ? (
                             <div className="space-y-4">
                                 <div className="space-y-1">
-                                    <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">邮箱</label>
-                                    <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
-                                           className={cls.input} placeholder="请输入QQ邮箱" />
+                                    <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">手机号</label>
+                                    <input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })}
+                                           className={cls.input} placeholder={adminMode ? "管理员手机号" : "请输入11位手机号"} maxLength={11} />
                                 </div>
-                                <div className="space-y-1">
-                                    <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">密码</label>
-                                    <input type="password" value={form.pw} onChange={e => setForm({ ...form, pw: e.target.value })}
-                                           className={cls.input} placeholder="请输入密码" />
-                                </div>
-                                <button onClick={handleLogin} disabled={loading}
-                                        className={cls.btn + (adminMode ? ' bg-gradient-to-r from-[#660874] to-[#4a0656] shadow-[#660874]/20' : ' bg-gradient-to-r from-[#2c1810] to-[#4a2c1a] shadow-[#2c1810]/20') + ' mt-6'}>
-                                    {loading ? <><Icon name="loader-2" size={18} className="animate-spin" /> 进入中…</> : '马上进入小羽书屋'}
-                                </button>
+                                {adminMode && (
+                                    <div className="space-y-1">
+                                        <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">密码</label>
+                                        <input type="password" value={form.pw} onChange={e => setForm({ ...form, pw: e.target.value })}
+                                               className={cls.input} placeholder="请输入管理员密码" />
+                                    </div>
+                                )}
+                                {adminMode ? (
+                                    <button onClick={handleAdminLogin} disabled={loading}
+                                            className={cls.btn + ' bg-gradient-to-r from-[#660874] to-[#4a0656] shadow-[#660874]/20 mt-6'}>
+                                        {loading ? <><Icon name="loader-2" size={18} className="animate-spin" /> 验证中…</> : '馆长执钥入阁'}
+                                    </button>
+                                ) : (
+                                    <button onClick={handleSendCode} disabled={loading}
+                                            className={cls.btn + ' bg-gradient-to-r from-[#2c1810] to-[#4a2c1a] shadow-[#2c1810]/20 mt-6'}>
+                                        {loading ? <><Icon name="loader-2" size={18} className="animate-spin" /> 发送中…</> : '获取短信验证码'}
+                                    </button>
+                                )}
                                 <p className="text-center text-sm text-[#8b7355] pt-2 cursor-pointer hover:text-[#2c1810] transition-colors"
-                                   onClick={() => { setMode('register'); setMsg(null); setForm({ email: '', pw: '', name: '', dept: '', type: 'UNDERGRAD' }); setOtpStage(null); setOtp(['', '', '', '', '', '']); setOtpErr(''); }}>
+                                   onClick={() => resetForm('register')}>
                                     暂无账号？点此注册小羽书屋账号 →
                                 </p>
                                 {!adminMode && (
@@ -438,26 +611,21 @@
                                     </button>
                                 )}
                                 <p className={`text-center text-[10px] pt-3 cursor-pointer hover:opacity-80 transition-opacity font-bold tracking-wider ${adminMode ? 'text-[#660874]' : 'text-[#b8a99a]'}`}
-                                   onClick={() => { setAdminMode(!adminMode); setMsg(null); }}>
+                                   onClick={() => { setAdminMode(!adminMode); setMsg(null); setForm({ ...form, pw: '' }); }}>
                                     {adminMode ? '← 返回普通读者登录' : '🔑 管理员入口'}
                                 </p>
                             </div>
                         ) : (
                             <div className="space-y-3 max-h-[420px] overflow-y-auto no-scrollbar pr-2">
                                 <div className="space-y-1">
-                                    <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">邮箱 *</label>
-                                    <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
-                                           className={cls.input} placeholder="请输入QQ邮箱" />
+                                    <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">手机号 *</label>
+                                    <input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })}
+                                           className={cls.input} placeholder="请输入11位手机号" maxLength={11} />
                                 </div>
                                 <div className="space-y-1">
                                     <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">姓名 *</label>
                                     <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
                                            className={cls.input} placeholder="请输入您的姓名" />
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">密码 *</label>
-                                    <input type="password" value={form.pw} onChange={e => setForm({ ...form, pw: e.target.value })}
-                                           className={cls.input} placeholder="密码必须大于六位" />
                                 </div>
                                 <div className="grid grid-cols-2 gap-3">
                                     <div className="space-y-1">
@@ -475,12 +643,12 @@
                                                className={cls.input} placeholder="如：翰林院" />
                                     </div>
                                 </div>
-                                <button onClick={handleRegister} disabled={otpStage === 'sending'}
+                                <button onClick={handleSendCode} disabled={loading}
                                         className={cls.btn + ' bg-gradient-to-r from-[#b22222] to-[#8b1a1a] shadow-[#b22222]/20 mt-4'}>
-                                    {otpStage === 'sending' ? <><Icon name="loader-2" size={18} className="animate-spin" /> 飞鸽传笺中…</> : '投帖注册'}
+                                    {loading ? <><Icon name="loader-2" size={18} className="animate-spin" /> 发送中…</> : '获取短信验证码'}
                                 </button>
                                 <p className="text-center text-sm text-[#8b7355] pt-2 pb-2 cursor-pointer hover:text-[#2c1810] transition-colors"
-                                   onClick={() => { setMode('login'); setMsg(null); setForm({ email: '', pw: '', name: '', dept: '', type: 'UNDERGRAD' }); setOtpStage(null); setOtp(['', '', '', '', '', '']); setOtpErr(''); }}>
+                                   onClick={() => resetForm('login')}>
                                     ← 已有名帖，返回叩门
                                 </p>
                             </div>
@@ -492,7 +660,7 @@
 
         // ======================== Dashboard ========================
         function Dashboard({ user, db, setDb, onLogout }) {
-            const [view, setView] = useState(user.role === 'ADMIN' ? 'admin_home' : 'reader_home');
+            const [view, setView] = useState(user.is_admin ? 'admin_home' : 'reader_home');
             const [search, setSearch] = useState('');
             const filteredBooks = db.books.filter(b => b.title.includes(search) || b.isbn.includes(search) || (b.author && b.author.includes(search)));
 
@@ -531,16 +699,16 @@
 
                         <div className="flex-1 space-y-1.5">
                             <NavBtn icon="home" label="系统首页" active={view.includes('home')}
-                                    onClick={() => setView(user.role === 'ADMIN' ? 'admin_home' : 'reader_home')} />
+                                    onClick={() => setView(user.is_admin ? 'admin_home' : 'reader_home')} />
                             <NavBtn icon="search" label="馆藏检索" active={view === 'search'} onClick={() => setView('search')} />
                             <NavBtn icon="bookmark" label="我的借阅" active={view === 'my'} onClick={() => setView('my')} />
-                            <NavBtn icon="pen-line" label="读者书评" active={view === 'reviews'} onClick={() => setView('reviews')} />
-                            {user.role === 'ADMIN' && (
+                            <NavBtn icon="pen-line" label="书屋评价" active={view === 'eval_form'} onClick={() => setView('eval_form')} />
+                            {user.is_admin === true && (
                                 <div className="mt-8 pt-6 border-t border-[#d4c5b2]/30">
                                     <p className="text-[10px] font-bold text-[#8b7355] uppercase mb-3 px-4 tracking-widest">馆务管理</p>
                                     <NavBtn icon="plus-circle" label="图书入库编目" active={view === 'add'} onClick={() => setView('add')} />
                                     <NavBtn icon="users" label="读者信息管理" active={view === 'users'} onClick={() => setView('users')} />
-                                    <NavBtn icon="messages-square" label="评价管理" active={view === 'evaluations'} onClick={() => setView('evaluations')} />
+                                    <NavBtn icon="messages-square" label="匿名评价管理" active={view === 'eval_admin'} onClick={() => setView('eval_admin')} />
                                 </div>
                             )}
                         </div>
@@ -552,7 +720,7 @@
                                 <div className="min-w-0">
                                     <p className="text-sm font-bold truncate text-[#2c1810]">{user.name}</p>
                                     <p className="text-[10px] text-[#8b7355] font-bold tracking-tight uppercase">
-                                        {user.role === 'GUEST' ? '访客模式 · 仅浏览' : user.role === 'ADMIN' ? '馆长：' + (user.account || '') : (user.email || user.account || '').split('@')[0]}
+                                        {user.role === 'GUEST' ? '访客模式 · 仅浏览' : user.is_admin ? '馆长：' + (user.account || '') : (user.phone || user.account || '')}
                                     </p>
                                 </div>
                             </div>
@@ -570,8 +738,8 @@
                         {view === 'my' && <MyBorrowings db={db} user={user} />}
                         {view === 'add' && <AddBook />}
                         {view === 'users' && <UsersManagement db={db} setDb={setDb} />}
-                        {view === 'evaluations' && <EvaluationsManager user={user} />}
-                        {view === 'reviews' && <ReviewBoard />}
+                        {view === 'eval_admin' && <EvaluationsManager user={user} />}
+                        {view === 'eval_form' && <BookEvaluation user={user} />}
                     </main>
                 </div>
             );
@@ -736,7 +904,7 @@
                                 <div className="flex-1 py-1 flex flex-col min-w-0">
                                     <div className="flex justify-between items-start mb-2">
                                         <div className="px-2.5 py-1 bg-[#faf6f0] text-[#8b7355] rounded-md text-[10px] font-bold w-fit truncate max-w-[120px]">{b.category}</div>
-                                        {user && user.role === 'ADMIN' && (
+                                        {user && user.is_admin && (
                                             <button onClick={() => deleteBook(b.id)} className="text-[#b8a99a] hover:text-red-500 p-1 transition-colors"><Icon name="trash-2" size={16} /></button>
                                         )}
                                     </div>
@@ -865,7 +1033,7 @@
             };
 
             const exportCSV = () => {
-                const headers = ["邮箱/账号", "姓名", "院系", "类型", "状态"];
+                const headers = ["手机号/账号", "姓名", "院系", "类型", "状态"];
                 const rows = filteredUsers.map(u => [u.account, u.name, u.department, READER_TYPES[u.readerType]?.label || '未知', u.status === 'ACTIVE' ? '正常' : '冻结']);
                 const csvContent = "data:text/csv;charset=utf-8,﻿" + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
                 const link = document.createElement("a");
@@ -897,7 +1065,7 @@
                             <div className="relative flex-1 max-w-md">
                                 <Icon name="search" size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#8b7355]" />
                                 <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
-                                       placeholder="搜索姓名、邮箱、院系…"
+                                       placeholder="搜索姓名、手机号、院系…"
                                        className="w-full pl-10 pr-4 py-2 bg-white rounded-lg border border-[#d4c5b2]/30 shadow-sm focus:ring-2 ring-[#8b4513]/20 outline-none text-sm transition-all text-[#2c1810]" />
                             </div>
                         </div>
@@ -983,7 +1151,7 @@
                             <button onClick={onClose} className="p-2 text-[#8b7355] hover:bg-[#faf6f0] rounded-full"><Icon name="x" size={20} /></button>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
-                            <Field label="邮箱/账号" value={form.account} onChange={v => setForm({ ...form, account: v })} disabled={!!user} />
+                            <Field label="手机号/账号" value={form.account} onChange={v => setForm({ ...form, account: v })} disabled={!!user} />
                             <Field label="真实姓名" value={form.name} onChange={v => setForm({ ...form, name: v })} />
                             <Field label="院系/部门" value={form.department} onChange={v => setForm({ ...form, department: v })} />
                             <Field label="联系电话" value={form.phone} onChange={v => setForm({ ...form, phone: v })} />
@@ -1015,19 +1183,90 @@
             );
         }
 
-        // ======================== ReviewBoard（公开评价看板） ========================
-        function ReviewBoard() {
+        // ======================== BookEvaluation（书屋评价） ========================
+        function BookEvaluation({ user }) {
             const [evals, setEvals] = useState([]);
             const [loading, setLoading] = useState(true);
+            const [form, setForm] = useState({ q1: '', q1Custom: '', q2: '', q2Custom: '', q3: '', q4: '', q5: null, q5Preview: '', q6: '' });
+            const [uploading, setUploading] = useState(false);
+            const [submitting, setSubmitting] = useState(false);
+            const [msg, setMsg] = useState(null);
+            const [q6Focused, setQ6Focused] = useState(false);
+            const fileRef = useRef(null);
 
-            useEffect(() => {
-                const fetchEvals = async () => {
-                    const { data, error } = await supabase.from('evaluations').select('*').order('created_at', { ascending: false });
-                    if (!error && data) setEvals(data);
-                    setLoading(false);
+            const isGuest = user.role === 'GUEST';
+
+            const fetchEvals = async () => {
+                let query = supabase.from('evaluations').select('*').order('created_at', { ascending: false });
+                if (isGuest && user.guest_token) {
+                    query = query.eq('guest_token', user.guest_token);
+                }
+                const { data, error } = await query;
+                if (!error && data) setEvals(data);
+                setLoading(false);
+            };
+
+            useEffect(() => { fetchEvals(); }, []);
+
+            const handlePhotoSelect = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                if (file.size > 5 * 1024 * 1024) return setMsg({ type: 'warn', text: '照片大小不能超过 5MB' });
+                const reader = new FileReader();
+                reader.onload = (ev) => setForm({ ...form, q5: file, q5Preview: ev.target.result });
+                reader.readAsDataURL(file);
+            };
+
+            const handleSubmit = async () => {
+                if (!form.q1) return setMsg({ type: 'warn', text: '请选择 Q1：我们是怎么认识的？' });
+                if (form.q1 === '其他' && !form.q1Custom.trim()) return setMsg({ type: 'warn', text: '请填写 Q1 自定义相识方式' });
+                if (!form.q2) return setMsg({ type: 'warn', text: '请选择 Q2：我们现在是什么关系？' });
+                if (form.q2 === '其他' && !form.q2Custom.trim()) return setMsg({ type: 'warn', text: '请填写 Q2 自定义关系' });
+
+                setSubmitting(true); setMsg(null);
+
+                let photoUrl = '';
+                if (form.q5) {
+                    try {
+                        const ext = form.q5.name.split('.').pop() || 'jpg';
+                        const filePath = `eval_${Date.now()}_${Math.random().toString(36).substring(2,6)}.${ext}`;
+                        const { error: uploadErr } = await supabase.storage.from('eval-photos').upload(filePath, form.q5);
+                        if (uploadErr) throw uploadErr;
+                        const { data: urlData } = supabase.storage.from('eval-photos').getPublicUrl(filePath);
+                        photoUrl = urlData.publicUrl;
+                    } catch (e) {
+                        setSubmitting(false);
+                        return setMsg({ type: 'err', text: '照片上传失败：' + (e.message || e) });
+                    }
+                }
+
+                const row = {
+                    q1_meet: form.q1 === '其他' ? form.q1Custom.trim() : form.q1,
+                    q1_meet_custom: form.q1 === '其他' ? form.q1Custom.trim() : null,
+                    q2_relation: form.q2 === '其他' ? form.q2Custom.trim() : form.q2,
+                    q2_relation_custom: form.q2 === '其他' ? form.q2Custom.trim() : null,
+                    q3_first_impression: form.q3.trim() || null,
+                    q5_message: form.q4.trim() || null,
+                    q4_personality: form.q6.trim() || null,
+                    photo_url: photoUrl || null,
+                    user_id: isGuest ? null : (user.id || null),
+                    guest_token: isGuest ? (user.guest_token || null) : null
                 };
-                fetchEvals();
-            }, []);
+
+                const { error } = await supabase.from('evaluations').insert(row);
+                if (error) {
+                    setMsg({ type: 'err', text: '投递失败：' + error.message });
+                } else {
+                    setMsg({ type: 'ok', text: '素笺已投，感谢寄语！' });
+                    setForm({ q1: '', q1Custom: '', q2: '', q2Custom: '', q3: '', q4: '', q5: null, q5Preview: '', q6: '' });
+                    setQ6Focused(false);
+                    fetchEvals();
+                }
+                setSubmitting(false);
+            };
+
+            const Q1_OPTIONS = ['小学', '初中', '高中', '大学', '其他'];
+            const Q2_OPTIONS = ['师生', '朋友', '大学同学', '其他'];
 
             if (loading) {
                 return (
@@ -1039,12 +1278,117 @@
             }
 
             return (
-                <div className="animate-in max-w-6xl mx-auto">
+                <div className="animate-in max-w-5xl mx-auto">
                     <div className="mb-8">
-                        <h2 className="text-3xl font-black text-[#2c1810]" style={{ fontFamily: 'serif' }}>读者书评 · 评价看板</h2>
-                        <p className="text-[#8b7355] text-sm mt-2">共 {evals.length} 封素笺 · 字字珠玑，落墨生香</p>
+                        <h2 className="text-3xl font-black text-[#2c1810]" style={{ fontFamily: 'serif' }}>书屋评价</h2>
+                        <p className="text-[#8b7355] text-sm mt-2">
+                            {isGuest ? '正在以游客身份浏览（仅可见自己的投笺）' : `共 ${evals.length} 封素笺 · 字字珠玑，落墨生香`}
+                        </p>
                     </div>
 
+                    {/* 评价提交表单 */}
+                    <div className="bg-white p-8 rounded-[2.5rem] border border-[#d4c5b2]/30 shadow-sm mb-8">
+                        <h3 className="text-lg font-black text-[#2c1810] mb-5" style={{ fontFamily: 'serif' }}>投笺寄语</h3>
+                        <div className="space-y-5">
+                            {/* Q1 + Q2 row */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-[10px] font-black text-[#b22222] uppercase ml-2 tracking-widest">Q1 相识 *</label>
+                                    <select value={form.q1} onChange={e => setForm({ ...form, q1: e.target.value, q1Custom: e.target.value === '其他' ? form.q1Custom : '' })}
+                                            className="w-full p-4 bg-[#faf6f0] border border-[#d4c5b2] rounded-xl outline-none focus:ring-2 ring-[#8b4513]/20 transition-all text-[#2c1810] text-sm">
+                                        <option value="">— 请选择 —</option>
+                                        {Q1_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                                    </select>
+                                    {form.q1 === '其他' && (
+                                        <input value={form.q1Custom} onChange={e => setForm({ ...form, q1Custom: e.target.value })}
+                                               placeholder="请填写相识方式…" maxLength={50}
+                                               className="w-full p-3 mt-2 bg-[#faf6f0] border border-[#d4c5b2] rounded-xl outline-none focus:ring-2 ring-[#8b4513]/20 text-[#2c1810] placeholder-[#b8a99a] text-sm" />
+                                    )}
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-black text-[#b22222] uppercase ml-2 tracking-widest">Q2 关系 *</label>
+                                    <select value={form.q2} onChange={e => setForm({ ...form, q2: e.target.value, q2Custom: e.target.value === '其他' ? form.q2Custom : '' })}
+                                            className="w-full p-4 bg-[#faf6f0] border border-[#d4c5b2] rounded-xl outline-none focus:ring-2 ring-[#8b4513]/20 transition-all text-[#2c1810] text-sm">
+                                        <option value="">— 请选择 —</option>
+                                        {Q2_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                                    </select>
+                                    {form.q2 === '其他' && (
+                                        <input value={form.q2Custom} onChange={e => setForm({ ...form, q2Custom: e.target.value })}
+                                               placeholder="请填写关系…" maxLength={50}
+                                               className="w-full p-3 mt-2 bg-[#faf6f0] border border-[#d4c5b2] rounded-xl outline-none focus:ring-2 ring-[#8b4513]/20 text-[#2c1810] placeholder-[#b8a99a] text-sm" />
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Q3 */}
+                            <div>
+                                <label className="text-[10px] font-black text-[#8b7355] uppercase ml-2 tracking-widest">Q3 你对我的第一印象？（选填）</label>
+                                <input value={form.q3} onChange={e => setForm({ ...form, q3: e.target.value })}
+                                       placeholder="初见时，我给你的印象是…" maxLength={200}
+                                       className="w-full p-4 bg-[#faf6f0] border border-[#d4c5b2] rounded-xl outline-none focus:ring-2 ring-[#8b4513]/20 transition-all text-[#2c1810] placeholder-[#b8a99a] text-sm" />
+                            </div>
+
+                            {/* Q4 */}
+                            <div>
+                                <label className="text-[10px] font-black text-[#8b7355] uppercase ml-2 tracking-widest">Q4 你想对我说点什么？（选填）</label>
+                                <textarea value={form.q4} onChange={e => setForm({ ...form, q4: e.target.value })}
+                                          rows={4} placeholder="写下你想对我说的心里话…" maxLength={2000}
+                                          className="w-full p-4 bg-[#faf6f0] border border-[#d4c5b2] rounded-xl outline-none focus:ring-2 ring-[#8b4513]/20 transition-all text-[#2c1810] placeholder-[#b8a99a] text-sm resize-none" />
+                                <p className="text-[10px] text-[#b8a99a] text-right mt-1">{form.q4.length}/2000</p>
+                            </div>
+
+                            {/* Q5 */}
+                            <div>
+                                <label className="text-[10px] font-black text-[#8b7355] uppercase ml-2 tracking-widest">Q5 上传一张我们之间的照片（选填）</label>
+                                <div className="flex items-start gap-4 mt-1">
+                                    {form.q5Preview ? (
+                                        <div className="relative">
+                                            <img src={form.q5Preview} alt="预览" className="w-32 h-32 object-cover rounded-xl border border-[#d4c5b2]/30 shadow-sm" />
+                                            <button onClick={() => setForm({ ...form, q5: null, q5Preview: '' })}
+                                                    className="absolute -top-2 -right-2 w-6 h-6 bg-red-400 text-white rounded-full flex items-center justify-center text-xs hover:bg-red-500 transition-colors">✕</button>
+                                        </div>
+                                    ) : (
+                                        <div onClick={() => fileRef.current?.click()}
+                                             className="w-32 h-32 border-2 border-dashed border-[#d4c5b2] rounded-xl flex flex-col items-center justify-center text-[#b8a99a] cursor-pointer hover:border-[#8b7355] hover:text-[#8b7355] transition-colors bg-[#faf6f0]/50">
+                                            <Icon name="camera" size={24} />
+                                            <span className="text-[10px] mt-1 font-medium">点击上传</span>
+                                        </div>
+                                    )}
+                                    <input ref={fileRef} type="file" accept="image/*" onChange={handlePhotoSelect} className="hidden" />
+                                    <div className="text-[10px] text-[#b8a99a] leading-relaxed">
+                                        <p>支持 JPG/PNG 格式</p>
+                                        <p>文件不超过 5MB</p>
+                                        <p>上传至 eval-photos 存储桶</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Q6 */}
+                            <div>
+                                <label className="text-[10px] font-black text-[#8b7355] uppercase ml-2 tracking-widest">Q6 你是谁？（选填）</label>
+                                <input value={form.q6} onChange={e => setForm({ ...form, q6: e.target.value })}
+                                       onFocus={() => setQ6Focused(true)} onBlur={() => setQ6Focused(false)}
+                                       placeholder={q6Focused ? '' : '感谢您的建议'} maxLength={100}
+                                       className="w-full p-4 bg-[#faf6f0] border border-[#d4c5b2] rounded-xl outline-none focus:ring-2 ring-[#8b4513]/20 transition-all text-[#2c1810] placeholder-[#b8a99a] text-sm" />
+                            </div>
+
+                            {msg && (
+                                <div className={`p-4 rounded-2xl text-sm font-medium ${
+                                    msg.type === 'ok' ? 'bg-[#f0f7f0] text-[#2d5a27] border border-[#c8e6c9]' :
+                                    msg.type === 'err' ? 'bg-[#fef2f2] text-[#991b1b] border border-[#fecaca]' :
+                                    'bg-[#fefce8] text-[#854d0e] border border-[#fef08a]'}`}>
+                                    {msg.text}
+                                </div>
+                            )}
+
+                            <button onClick={handleSubmit} disabled={submitting || uploading}
+                                    className="w-full py-4 bg-gradient-to-r from-[#2c1810] to-[#4a2c1a] text-white rounded-2xl font-bold shadow-lg shadow-[#2c1810]/15 hover:scale-[1.01] active:scale-95 transition-all disabled:opacity-60 flex items-center justify-center gap-2">
+                                {submitting ? <><Icon name="loader-2" size={18} className="animate-spin" /> 投递中…</> : <><Icon name="send" size={18} /> 匿名投递</>}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* 评价列表 */}
                     {evals.length === 0 ? (
                         <div className="py-24 text-center bg-white rounded-[3rem] border-2 border-dashed border-[#d4c5b2]/50">
                             <div className="w-20 h-20 bg-[#faf6f0] rounded-full flex items-center justify-center mx-auto mb-6">
@@ -1061,10 +1405,10 @@
                                         <div className="flex items-center gap-3">
                                             <div className="w-10 h-10 rounded-full bg-[#b22222]/10 text-[#b22222] flex items-center justify-center font-bold text-sm"
                                                  style={{ fontFamily: 'serif' }}>
-                                                {(e.q2_meet || '匿')[0]}
+                                                {(e.q4_personality || '匿')[0]}
                                             </div>
                                             <div>
-                                                <p className="font-bold text-[#2c1810] text-sm">{e.q2_meet || '匿名读者'}</p>
+                                                <p className="font-bold text-[#2c1810] text-sm">{e.q4_personality || '匿名读者'}</p>
                                                 <p className="text-[10px] text-[#8b7355]">{new Date(e.created_at).toLocaleString('zh-CN')}</p>
                                             </div>
                                         </div>
@@ -1073,24 +1417,30 @@
                                     <div className="space-y-2.5 text-sm">
                                         <div className="flex gap-2">
                                             <span className="text-[#b22222] font-bold shrink-0">Q1 相识</span>
-                                            <span className="text-[#2c1810]">{e.q1_meet || '-'}</span>
+                                            <span className="text-[#2c1810]">{e.q1_meet || '-'}{e.q1_meet_custom && e.q1_meet_custom !== e.q1_meet ? '（' + e.q1_meet_custom + '）' : ''}</span>
                                         </div>
                                         <div className="flex gap-2">
                                             <span className="text-[#b22222] font-bold shrink-0">Q2 关系</span>
-                                            <span className="text-[#2c1810]">{e.q2_relation || '-'}</span>
+                                            <span className="text-[#2c1810]">{e.q2_relation || '-'}{e.q2_relation_custom && e.q2_relation_custom !== e.q2_relation ? '（' + e.q2_relation_custom + '）' : ''}</span>
                                         </div>
-                                        <div className="flex gap-2">
-                                            <span className="text-[#8b7355] font-bold shrink-0">Q3 初印</span>
-                                            <span className="text-[#2c1810] italic">{e.q3_first_impression || '未填写'}</span>
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <span className="text-[#8b7355] font-bold shrink-0">Q4 为人</span>
-                                            <span className="text-[#2c1810] italic">{e.q4_personality || '未填写'}</span>
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <span className="text-[#8b7355] font-bold shrink-0">Q5 寄语</span>
-                                            <span className="text-[#2c1810] italic">{e.q5_message || '未填写'}</span>
-                                        </div>
+                                        {e.q3_first_impression && (
+                                            <div className="flex gap-2">
+                                                <span className="text-[#8b7355] font-bold shrink-0">Q3 第一印象</span>
+                                                <span className="text-[#2c1810] italic">{e.q3_first_impression}</span>
+                                            </div>
+                                        )}
+                                        {e.q5_message && (
+                                            <div className="flex gap-2">
+                                                <span className="text-[#8b7355] font-bold shrink-0">Q4 寄语</span>
+                                                <span className="text-[#2c1810] italic">{e.q5_message}</span>
+                                            </div>
+                                        )}
+                                        {e.q4_personality && (
+                                            <div className="flex gap-2">
+                                                <span className="text-[#8b7355] font-bold shrink-0">Q6 身份</span>
+                                                <span className="text-[#2c1810] italic">{e.q4_personality}</span>
+                                            </div>
+                                        )}
                                     </div>
                                     {e.photo_url && (
                                         <div className="mt-4 pt-4 border-t border-[#d4c5b2]/20">
@@ -1113,17 +1463,22 @@
             const [evals, setEvals] = useState([]);
             const [loading, setLoading] = useState(true);
 
-            useEffect(() => {
-                const fetchEvals = async () => {
-                    const { data, error } = await supabase.from('evaluations').select('*').order('created_at', { ascending: false });
-                    if (!error && data) setEvals(data);
-                    setLoading(false);
-                };
-                fetchEvals();
-            }, []);
+            const fetchEvals = async () => {
+                const { data, error } = await supabase.from('evaluations').select('*').order('created_at', { ascending: false });
+                if (!error && data) setEvals(data);
+                setLoading(false);
+            };
 
-            // 仅限硬编码管理员
-            if (user.account !== '18723992791') {
+            useEffect(() => { fetchEvals(); }, []);
+
+            const handleDelete = async (id) => {
+                if (!confirm('确定要删除这条评价吗？此操作不可恢复。')) return;
+                const { error } = await supabase.from('evaluations').delete().eq('id', id);
+                if (error) { alert('删除失败：' + error.message); }
+                else { fetchEvals(); }
+            };
+
+            if (!user.is_admin) {
                 return (
                     <div className="animate-in max-w-4xl mx-auto text-center py-20">
                         <div className="w-16 h-16 mx-auto mb-5 rounded-full bg-[#fef2f2] flex items-center justify-center text-[#b22222]">
@@ -1148,7 +1503,7 @@
                 <div className="animate-in max-w-6xl mx-auto">
                     <div className="flex justify-between items-end mb-8">
                         <div>
-                            <h2 className="text-3xl font-black text-[#2c1810]" style={{ fontFamily: 'serif' }}>评价管理</h2>
+                            <h2 className="text-3xl font-black text-[#2c1810]" style={{ fontFamily: 'serif' }}>匿名评价管理</h2>
                             <p className="text-[#8b7355] text-sm mt-2">共 {evals.length} 封素笺投递</p>
                         </div>
                     </div>
@@ -1162,54 +1517,65 @@
                             <p className="text-sm text-[#8b7355]">待读者落墨挥毫，笺至自然可见</p>
                         </div>
                     ) : (
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            {evals.map((e, i) => (
+                        <div className="grid grid-cols-1 gap-5">
+                            {evals.map(e => (
                                 <div key={e.id} className="bg-white p-6 rounded-[2rem] border border-[#d4c5b2]/30 shadow-sm hover:shadow-md transition-shadow">
-                                    {/* 头信息 */}
-                                    <div className="flex items-center justify-between mb-4 pb-4 border-b border-[#d4c5b2]/20">
+                                    <div className="flex items-start justify-between mb-4 pb-4 border-b border-[#d4c5b2]/20">
                                         <div className="flex items-center gap-3">
                                             <div className="w-10 h-10 rounded-full bg-[#b22222]/10 text-[#b22222] flex items-center justify-center font-bold text-sm"
                                                  style={{ fontFamily: 'serif' }}>
-                                                {(e.q2_meet || '匿')[0]}
+                                                {(e.q4_personality || e.q1_meet || '匿')[0]}
                                             </div>
                                             <div>
-                                                <p className="font-bold text-[#2c1810] text-sm">{e.q2_meet || '匿名读者'}</p>
+                                                <p className="font-bold text-[#2c1810] text-sm">{e.q4_personality || e.q1_meet || '匿名读者'}</p>
                                                 <p className="text-[10px] text-[#8b7355]">{new Date(e.created_at).toLocaleString('zh-CN')}</p>
                                             </div>
                                         </div>
-                                        <span className="text-[10px] text-[#b8a99a] font-mono">#{String(e.id).padStart(4, '0')}</span>
+                                        <div className="flex items-center gap-3">
+                                            {e.guest_token && (
+                                                <span className="px-2.5 py-1 bg-amber-50 text-amber-700 text-[10px] font-bold rounded-full border border-amber-200">游客投递</span>
+                                            )}
+                                            <span className="text-[10px] text-[#b8a99a] font-mono">#{String(e.id).padStart(4, '0')}</span>
+                                            <button onClick={() => handleDelete(e.id)}
+                                                    className="p-2 text-[#b8a99a] hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                                    title="删除评价">
+                                                <Icon name="trash-2" size={16} />
+                                            </button>
+                                        </div>
                                     </div>
 
-                                    {/* 评价内容 */}
-                                    <div className="space-y-2.5 text-sm">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                                         <div className="flex gap-2">
                                             <span className="text-[#b22222] font-bold shrink-0">Q1 相识</span>
-                                            <span className="text-[#2c1810]">{e.q1_meet || '-'}</span>
+                                            <span className="text-[#2c1810]">{e.q1_meet || '-'}{e.q1_meet_custom ? '（' + e.q1_meet_custom + '）' : ''}</span>
                                         </div>
                                         <div className="flex gap-2">
                                             <span className="text-[#b22222] font-bold shrink-0">Q2 关系</span>
-                                            <span className="text-[#2c1810]">{e.q2_relation || '-'}</span>
+                                            <span className="text-[#2c1810]">{e.q2_relation || '-'}{e.q2_relation_custom ? '（' + e.q2_relation_custom + '）' : ''}</span>
                                         </div>
                                         <div className="flex gap-2">
-                                            <span className="text-[#8b7355] font-bold shrink-0">Q3 初印</span>
+                                            <span className="text-[#8b7355] font-bold shrink-0">Q3 第一印象</span>
                                             <span className="text-[#2c1810] italic">{e.q3_first_impression || '未填写'}</span>
                                         </div>
                                         <div className="flex gap-2">
-                                            <span className="text-[#8b7355] font-bold shrink-0">Q4 为人</span>
-                                            <span className="text-[#2c1810] italic">{e.q4_personality || '未填写'}</span>
+                                            <span className="text-[#8b7355] font-bold shrink-0">Q4 寄语</span>
+                                            <span className="text-[#2c1810] italic">{e.q5_message || '未填写'}</span>
                                         </div>
                                         <div className="flex gap-2">
-                                            <span className="text-[#8b7355] font-bold shrink-0">Q5 寄语</span>
-                                            <span className="text-[#2c1810] italic">{e.q5_message || '未填写'}</span>
+                                            <span className="text-[#8b7355] font-bold shrink-0">Q5 照片</span>
+                                            <span className="text-[#2c1810]">{e.photo_url ? '已上传（见下方预览）' : '未上传'}</span>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <span className="text-[#8b7355] font-bold shrink-0">Q6 身份</span>
+                                            <span className="text-[#2c1810] italic">{e.q4_personality || '未填写'}</span>
                                         </div>
                                     </div>
 
-                                    {/* 照片预览 */}
                                     {e.photo_url && (
                                         <div className="mt-4 pt-4 border-t border-[#d4c5b2]/20">
                                             <img src={e.photo_url}
                                                  alt="评价附图"
-                                                 className="w-full max-h-64 object-cover rounded-xl border border-[#d4c5b2]/30 cursor-pointer hover:shadow-lg transition-shadow"
+                                                 className="w-full max-h-80 object-cover rounded-xl border border-[#d4c5b2]/30 cursor-pointer hover:shadow-lg transition-shadow"
                                                  onClick={() => window.open(e.photo_url, '_blank')} />
                                         </div>
                                     )}

@@ -2,238 +2,634 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>THU-Style 数字化图书管理平台</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.tailwindcss.com https://fonts.googleapis.com https://www.gstatic.com https://agakzhlswzimjylewvcg.supabase.co wss://agakzhlswzimjylewvcg.supabase.co; img-src 'self' data: https: blob:; media-src 'self' https:;">
+    <title>小羽书屋 · 数字化馆藏管理</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-    
+
     <style>
-       body { font-family: 'Inter', 'PingFang SC', sans-serif; }
-        .thu-purple { background: linear-gradient(135deg, #6b21a8 0%, #4338ca 100%); }
-        .glass { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
-        .book-card:hover { transform: translateY(-8px); box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1); }
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&display=swap');
+        body { font-family: 'Noto Serif SC', 'PingFang SC', serif; }
         .animate-in { animation: slideUp 0.4s ease-out forwards; }
         @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .book-card:hover { transform: translateY(-8px); box-shadow: 0 20px 25px -5px rgba(44,24,16,0.1); }
     </style>
 </head>
-<body class="bg-slate-50 text-slate-900">
+<body class="bg-[#faf6f0] text-[#2c1810]">
     <div id="root"></div>
 
-
-   <script type="text/babel">  
-      
-        // 2. 填写你的 Supabase 连接信息
-                // 2. 填写你的 Supabase 连接信息
-        const SUPABASE_URL = 'https://fdqxbxoxfmsrdjoahesl.supabase.co'; 
-        const SUPABASE_KEY = 'sb_publishable_ucWDth0derKEyvKUZyOHLg_Sic_B5EJ';   // ←←← 只保留这一串，不要加任何其他文字
+    <script type="text/babel">
+        const SUPABASE_URL = 'https://agakzhlswzimjylewvcg.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_YzYzzdOVSQzaNr1s3KjtLQ_KyHXfs5P';
         const supabase = (window.supabasejs || window.supabase).createClient(SUPABASE_URL, SUPABASE_KEY);
-        
-        const { useState, useEffect } = React;
 
-        // 3. 图标组件定义
+        const { useState, useEffect, useMemo, useRef, createElement } = React;
+
+        // ======================== Icon 组件 ========================
         const Icon = ({ name, size = 18, className = "" }) => {
-            useEffect(() => { 
-                if (window.lucide) window.lucide.createIcons(); 
-            }, [name]);
-            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
+            const icons = window.lucide && window.lucide.icons;
+            if (!icons || !icons[name]) return null;
+            const attrs = { width: size, height: size, stroke: "currentColor", fill: "none",
+                "stroke-width": 1.5, "stroke-linecap": "round", "stroke-linejoin": "round",
+                className: `lucide lucide-${name} ${className}` };
+            const children = icons[name].map((tag, i) => createElement(tag[0], { key: i, ...(tag[1] || {}) }));
+            return createElement("svg", attrs, ...children);
         };
 
-        const DB_KEY = "THU_LIB_V3";
-        const DRAFT_KEY = "ADD_BOOK_DRAFT";
-
-        // 4. 初始数据（这里保持不变）
-        const INITIAL_DB = {
-            users: [
-                { id: '18723992791', account: '18723992791', password: 'rqy18723992791', role: 'ADMIN', name: '系统管理员' }
-            ],
-            books: [], // 书籍将从云端获取
-            borrowings: []
+        // ======================== 通知配置 ========================
+        const NOTIFY_CONFIG = {
+            enabled: true,
+            type: 'serverchan',
+            serverChanKey: 'SCT345313Tdstay9vuHPBIOHLGy4gQsbel',
+            feishuWebhook: 'https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_TOKEN',
+            customWebhook: ''
         };
 
+        const READER_TYPES = {
+            'UNDERGRAD': { label: '本科生', limit: 10 },
+            'POSTGRAD': { label: '研究生', limit: 20 },
+            'STAFF': { label: '教职工', limit: 30 },
+            'ADMIN': { label: '管理员', limit: 99 },
+            'GUEST': { label: '游客', limit: 0 }
+        };
+
+        async function sendNewReaderNotification(reader) {
+            if (!NOTIFY_CONFIG.enabled) return;
+            const title = '📚 新读者注册通知';
+            const content =
+                `读者姓名：${reader.name}\n` +
+                `邮箱账号：${reader.account}\n` +
+                `院系/部门：${reader.department}\n` +
+                `读者类型：${READER_TYPES[reader.readerType]?.label || '未知'}\n` +
+                `注册时间：${new Date().toLocaleString('zh-CN')}`;
+            try {
+                if (NOTIFY_CONFIG.type === 'serverchan') {
+                    await fetch(`https://sctapi.ftqq.com/${NOTIFY_CONFIG.serverChanKey}.send`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: `title=${encodeURIComponent(title)}&desp=${encodeURIComponent(content)}`
+                    });
+                } else if (NOTIFY_CONFIG.type === 'feishu') {
+                    await fetch(NOTIFY_CONFIG.feishuWebhook, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ msg_type: 'text', content: { text: title + '\n\n' + content } })
+                    });
+                } else if (NOTIFY_CONFIG.type === 'custom' && NOTIFY_CONFIG.customWebhook) {
+                    await fetch(NOTIFY_CONFIG.customWebhook, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title, content, reader })
+                    });
+                }
+            } catch (e) { console.warn('通知发送失败（不影响注册）:', e); }
+        }
+
+        // ======================== buildUser ========================
+        function buildUser(session) {
+            if (!session) return null;
+            const u = session.user;
+            return {
+                id: u.id,
+                account: u.email,
+                email: u.email,
+                name: u.user_metadata?.name || u.email?.split('@')[0] || '读者',
+                department: u.user_metadata?.department || '未知院系',
+                readerType: u.user_metadata?.readerType || 'UNDERGRAD',
+                role: u.user_metadata?.role || 'READER',
+                status: 'ACTIVE',
+                phone: u.phone || ''
+            };
+        }
+
+        // ======================== App ========================
         function App() {
-    const [user, setUser] = useState(() => {
-        const saved = localStorage.getItem("USER_SESSION");
-        return saved ? JSON.parse(saved) : null;
-    });
+            const [user, setUser] = useState(null);
+            const [authReady, setAuthReady] = useState(false);
+            const [db, setDb] = useState({ users: [], books: [], borrowings: [] });
 
-    const [db, setDb] = useState({ ...INITIAL_DB, books: [] });
+            // Supabase Auth 监听（兼容管理员本地 Session）
+            useEffect(() => {
+                const localSession = localStorage.getItem("USER_SESSION");
+                supabase.auth.getSession().then(({ data: { session } }) => {
+                    const supabaseUser = buildUser(session);
+                    if (supabaseUser) {
+                        setUser(supabaseUser);
+                    } else if (localSession) {
+                        try {
+                            const parsed = JSON.parse(localSession);
+                            if (parsed.role === 'ADMIN' && parsed.id === '18723992791') {
+                                setUser(parsed);
+                            }
+                        } catch(e) { localStorage.removeItem("USER_SESSION"); }
+                    }
+                    setAuthReady(true);
+                });
+                const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+                    const u = buildUser(session);
+                    if (u) {
+                        setUser(u);
+                        localStorage.setItem("USER_SESSION", JSON.stringify(u));
+                    } else {
+                        const local = localStorage.getItem("USER_SESSION");
+                        if (local) {
+                            try {
+                                const parsed = JSON.parse(local);
+                                if (parsed.role === 'ADMIN' && parsed.id === '18723992791') {
+                                    return; // 管理员本地 Session 不受 Supabase 空 Session 影响
+                                }
+                            } catch(e) {}
+                        }
+                        setUser(null);
+                        localStorage.removeItem("USER_SESSION");
+                    }
+                });
+                return () => subscription.unsubscribe();
+            }, []);
 
-    useEffect(() => {
-        const fetchBooks = async () => {
-            const { data, error } = await supabase.from('books').select('*').order('created_at', { ascending: false });
-            if (!error && data) {
-                setDb(prev => ({ ...prev, books: data }));
-            }
-        };
+            // 加载图书
+            useEffect(() => {
+                if (!authReady) return;
+                const fetchBooks = async () => {
+                    const { data, error } = await supabase.from('books').select('*').order('created_at', { ascending: false });
+                    if (!error && data) {
+                        if (data.length === 0) {
+                            // 自动 seed
+                            try {
+                                const resp = await fetch('data.json');
+                                if (resp.ok) {
+                                    const seedData = await resp.json();
+                                    const { error: seedErr } = await supabase.from('books').insert(
+                                        seedData.map(({ id, created_at, ...b }) => b)
+                                    );
+                                    if (!seedErr) {
+                                        const { data: fresh } = await supabase.from('books').select('*').order('created_at', { ascending: false });
+                                        if (fresh) setDb(prev => ({ ...prev, books: fresh }));
+                                        return;
+                                    }
+                                }
+                            } catch (_) {}
+                        }
+                        setDb(prev => ({ ...prev, books: data }));
+                    }
+                };
+                fetchBooks();
+                const channel = supabase.channel('books_realtime')
+                    .on('postgres_changes', { event: '*', schema: 'public', table: 'books' }, () => fetchBooks())
+                    .subscribe();
+                return () => { supabase.removeChannel(channel); };
+            }, [authReady]);
 
-        fetchBooks();
+            // 加载本地借阅记录
+            useEffect(() => {
+                const saved = localStorage.getItem("THU_LIB_BORROW");
+                if (saved) setDb(prev => ({ ...prev, borrowings: JSON.parse(saved) }));
+            }, []);
+            useEffect(() => {
+                if (db.borrowings.length > 0) localStorage.setItem("THU_LIB_BORROW", JSON.stringify(db.borrowings));
+            }, [db.borrowings]);
 
-        const channel = supabase.channel('books_realtime')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'books' }, 
-                () => { fetchBooks(); })
-            .subscribe();
+            const logout = async () => {
+                await supabase.auth.signOut();
+                setUser(null);
+                localStorage.removeItem("USER_SESSION");
+            };
 
-        return () => { supabase.removeChannel(channel); };
-    }, []);
+            const handleGuestLogin = () => {
+                const guestUser = {
+                    id: 'guest_' + Date.now(),
+                    account: 'guest',
+                    email: '',
+                    name: '游客',
+                    department: '访客',
+                    readerType: 'GUEST',
+                    role: 'GUEST',
+                    status: 'ACTIVE',
+                    phone: ''
+                };
+                setUser(guestUser);
+            };
 
-    const login = (u) => {
-        setUser(u);
-        localStorage.setItem("USER_SESSION", JSON.stringify(u));
-    };
-
-    const logout = () => {
-        setUser(null);
-        localStorage.removeItem("USER_SESSION");
-    };
-
-    return (
-        <div className="min-h-screen">
-            {user ? (
-                <Dashboard user={user} db={db} setDb={setDb} onLogout={logout} />
-            ) : (
-                <LoginPage onLogin={login} db={db} />
-            )}
-        </div>
-    );
-}
-
-        function LoginPage({ onLogin, db }) {
-            const [acc, setAcc] = useState('');
-            const [pw, setPw] = useState('');
-            return (
-                <div className="h-screen flex items-center justify-center bg-slate-900 relative overflow-hidden">
-                    <div className="absolute top-0 left-0 w-full h-full opacity-30">
-                        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-purple-600 blur-[120px] rounded-full"></div>
-                        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-blue-600 blur-[120px] rounded-full"></div>
+            if (!authReady) {
+                return (
+                    <div className="h-screen flex items-center justify-center bg-[#faf6f0]">
+                        <div className="text-center">
+                            <div className="w-16 h-16 mx-auto mb-5 rounded-full bg-[#b22222] flex items-center justify-center text-white font-black text-xl" style={{ fontFamily: 'serif' }}>書</div>
+                            <p className="text-[#8b7355] text-sm">正在叩门…</p>
+                        </div>
                     </div>
-                    <div className="w-[400px] p-10 glass rounded-[2.5rem] shadow-2xl relative z-10">
+                );
+            }
+
+            return (
+                <div className="min-h-screen">
+                    {user ? (
+                        <Dashboard user={user} db={db} setDb={setDb} onLogout={logout} />
+                    ) : (
+                        <LoginPage db={db} setDb={setDb} onGuestLogin={handleGuestLogin} />
+                    )}
+                </div>
+            );
+        }
+
+        // ======================== LoginPage ========================
+        function LoginPage({ db, setDb, onGuestLogin }) {
+            const [mode, setMode] = useState('login'); // 'login' | 'register'
+            const [adminMode, setAdminMode] = useState(false);
+            const [form, setForm] = useState({ email: '', pw: '', name: '', dept: '', type: 'UNDERGRAD' });
+            const [loading, setLoading] = useState(false);
+            const [msg, setMsg] = useState(null);
+            const [otpStage, setOtpStage] = useState(null); // null | 'sending' | 'sent' | 'verifying' | 'success'
+            const [otp, setOtp] = useState(['', '', '', '', '', '']);
+            const [otpErr, setOtpErr] = useState('');
+            const otpRefs = [useRef(null), useRef(null), useRef(null), useRef(null), useRef(null), useRef(null)];
+
+            const handleLogin = async () => {
+                if (!form.email || !form.pw) return setMsg({ type: 'warn', text: '请填写邮箱和密码' });
+
+                // 硬编码唯一管理员：本地验证绕过 Supabase Auth
+                if (form.email === '18723992791' && form.pw === 'rqy18723992791') {
+                    const adminUser = {
+                        id: '18723992791',
+                        account: '18723992791',
+                        email: 'admin@internal',
+                        name: '系统管理员',
+                        department: '图书馆',
+                        readerType: 'ADMIN',
+                        role: 'ADMIN',
+                        status: 'ACTIVE',
+                        phone: '18723992791'
+                    };
+                    localStorage.setItem("USER_SESSION", JSON.stringify(adminUser));
+                    window.location.href = '/';
+                    return;
+                }
+
+                setLoading(true); setMsg(null);
+                const { error } = await supabase.auth.signInWithPassword({ email: form.email, password: form.pw });
+                if (error) { setMsg({ type: 'err', text: error.message }); setLoading(false); }
+            };
+
+            const handleRegister = async () => {
+                if (!form.email || !form.pw || !form.name) return setMsg({ type: 'warn', text: '请填写必填项' });
+                if (form.pw.length < 6) return setMsg({ type: 'warn', text: '密码至少 6 位' });
+
+                // 拦截受保护的管理员账号
+                if (form.email === '18723992791' || form.name === '18723992791' || form.email.includes('18723992791@')) {
+                    return setMsg({ type: 'err', text: '该账号为受保护的系统账号，禁止注册' });
+                }
+
+                setOtpStage('sending'); setMsg(null);
+                try {
+                    const resp = await fetch(`${SUPABASE_URL}/functions/v1/send-otp`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: form.email })
+                    });
+                    const result = await resp.json();
+                    if (!resp.ok) throw new Error(result.error || '发送失败');
+                    setOtpStage('sent');
+                    setMsg({ type: 'ok', text: '验证码已发送至 ' + form.email + '，5 分钟内有效' });
+                    setTimeout(() => otpRefs[0].current?.focus(), 150);
+                } catch (e) {
+                    setOtpStage(null);
+                    setMsg({ type: 'err', text: '验证码发送失败：' + e.message });
+                }
+            };
+
+            const handleOtpChange = (val, idx) => {
+                const v = val.replace(/\D/g, '').slice(0, 1);
+                const next = [...otp]; next[idx] = v;
+                setOtp(next); setOtpErr('');
+                if (v && idx < 5) otpRefs[idx + 1].current?.focus();
+            };
+            const handleOtpKey = (e, idx) => {
+                if (e.key === 'Backspace' && !otp[idx] && idx > 0) otpRefs[idx - 1].current?.focus();
+            };
+
+            const handleVerify = async () => {
+                const code = otp.join('');
+                if (code.length !== 6) return setOtpErr('请输入完整 6 位验证码');
+                setOtpStage('verifying'); setOtpErr('');
+                try {
+                    const vResp = await fetch(`${SUPABASE_URL}/functions/v1/verify-otp`, {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: form.email, code })
+                    });
+                    const vResult = await vResp.json();
+                    if (!vResp.ok) throw new Error(vResult.error || '验证失败');
+
+                    const { error } = await supabase.auth.signUp({
+                        email: form.email,
+                        password: form.pw,
+                        options: { data: { name: form.name, department: form.dept || '未知院系', readerType: form.type } }
+                    });
+                    if (error) throw error;
+
+                    sendNewReaderNotification({ name: form.name, account: form.email, department: form.dept || '未知院系', readerType: form.type });
+                    setOtpStage('success');
+                    setMsg({ type: 'ok', text: '注册成功！正在入阁…' });
+                    setTimeout(() => { window.location.href = '/'; }, 1200);
+                } catch (e) {
+                    setOtpStage('sent');
+                    setOtp(['', '', '', '', '', '']);
+                    setOtpErr(e.message);
+                }
+            };
+
+            const handleResend = () => { setOtp(['', '', '', '', '', '']); setOtpErr(''); handleRegister(); };
+
+            const cls = {
+                input: 'w-full p-4 bg-[#faf6f0] border border-[#d4c5b2] rounded-xl outline-none focus:ring-2 ring-[#8b4513]/30 transition-all text-[#2c1810] placeholder-[#b8a99a]',
+                btn: 'w-full py-4 rounded-xl font-bold text-white shadow-lg transition-all active:scale-95 disabled:opacity-60 flex items-center justify-center gap-2',
+            };
+
+            return (
+                <div className="h-screen flex items-center justify-center bg-[#faf6f0] relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-full pointer-events-none opacity-[0.06]"
+                         style={{ backgroundImage: 'radial-gradient(circle at 20% 30%, #2c1810 1px, transparent 1px), radial-gradient(circle at 80% 70%, #2c1810 1px, transparent 1px)', backgroundSize: '60px 60px' }} />
+                    <div className="absolute top-[-15%] left-[-10%] w-[55%] h-[55%] bg-[#8b4513] blur-[150px] rounded-full opacity-[0.06]" />
+                    <div className="absolute bottom-[-15%] right-[-10%] w-[55%] h-[55%] bg-[#2c1810] blur-[150px] rounded-full opacity-[0.04]" />
+
+                    <div className="w-[440px] p-10 bg-white rounded-[3rem] shadow-2xl shadow-[#2c1810]/10 relative z-10 animate-in border border-[#d4c5b2]/30">
                         <div className="text-center mb-10">
-                            <h1 className="text-3xl font-black tracking-tighter text-slate-800">小羽的自习室</h1>
-                            <p className="text-slate-400 text-sm mt-2">数字化馆藏资源管理门户</p>
+                            <div className={`w-16 h-16 mx-auto mb-5 rounded-full flex items-center justify-center text-white font-black text-xl shadow-lg ${adminMode ? 'bg-[#660874] shadow-[#660874]/20' : 'bg-[#b22222] shadow-[#b22222]/20'}`}
+                                 style={{ fontFamily: 'serif' }}>書</div>
+                            <h1 className="text-2xl font-black tracking-widest text-[#2c1810]" style={{ fontFamily: 'serif' }}>小羽书屋</h1>
+                            {adminMode && <p className="text-[11px] font-bold text-[#660874] tracking-[0.2em] mt-1">清华大学 · 馆藏管理系统</p>}
+                            <p className="text-[#8b7355] text-xs mt-2 tracking-wider">
+                                {otpStage === 'success' ? '验印通过 · 即将入阁' : otpStage === 'sent' || otpStage === 'verifying' ? '验印 · 对证入阁' : mode === 'login' ? '叩门 · 入阁览卷' : '投帖 · 问道登门'}
+                            </p>
                         </div>
-                        <div className="space-y-4">
-                            <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">账号</label>
-                                <input value={acc} onChange={e=>setAcc(e.target.value)} className="w-full p-4 bg-slate-100 rounded-2xl border-none outline-none focus:ring-2 ring-purple-500 transition-all" placeholder="输入学号/工号" />
+
+                        {msg && (
+                            <div className={`mb-5 p-4 rounded-2xl text-sm font-medium ${
+                                msg.type === 'ok' ? 'bg-[#f0f7f0] text-[#2d5a27] border border-[#c8e6c9]' :
+                                msg.type === 'err' ? 'bg-[#fef2f2] text-[#991b1b] border border-[#fecaca]' :
+                                'bg-[#fefce8] text-[#854d0e] border border-[#fef08a]'}`}>
+                                {msg.text}
                             </div>
-                            <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-slate-400 uppercase ml-2">密码</label>
-                                <input type="password" value={pw} onChange={e=>setPw(e.target.value)} className="w-full p-4 bg-slate-100 rounded-2xl border-none outline-none focus:ring-2 ring-purple-500 transition-all" placeholder="请输入密码" />
+                        )}
+
+                        {otpStage === 'success' ? (
+                            <div className="text-center space-y-5 py-6">
+                                <div className="text-4xl">📜</div>
+                                <p className="text-[#2c1810] font-bold text-lg" style={{ fontFamily: 'serif' }}>名帖已投，验印通过</p>
+                                <p className="text-sm text-[#8b7355] leading-relaxed">正在为您打开阁门…</p>
                             </div>
-                            <button onClick={()=>{
-                                const found = db.users.find(u => u.account === acc && u.password === pw);
-                                if(found) onLogin(found); else alert("验证失败");
-                            }} className="w-full py-4 thu-purple text-white rounded-2xl font-bold shadow-xl shadow-purple-200 mt-6 hover:scale-[1.02] active:scale-95 transition-all">
-                                立即进入系统
-                            </button>
-                        </div>
+                        ) : otpStage === 'sent' || otpStage === 'verifying' ? (
+                            <div className="space-y-6">
+                                <p className="text-center text-sm text-[#8b7355] leading-relaxed">
+                                    一封素笺已寄至<br /><span className="font-bold text-[#2c1810]">{form.email}</span><br />请填写笺中六位验印
+                                </p>
+                                <div className="flex justify-center gap-2.5">
+                                    {otp.map((d, i) => (
+                                        <input key={i} ref={otpRefs[i]} value={d}
+                                               onChange={e => handleOtpChange(e.target.value, i)}
+                                               onKeyDown={e => handleOtpKey(e, i)} maxLength={1}
+                                               className="w-12 h-14 text-center text-xl font-black text-[#2c1810] bg-[#faf6f0] border-2 border-[#d4c5b2] rounded-xl outline-none focus:border-[#b22222] focus:ring-2 ring-[#b22222]/20 transition-all"
+                                               style={{ fontFamily: 'monospace' }} />
+                                    ))}
+                                </div>
+                                {otpErr && (
+                                    <div className="p-3 bg-[#fef2f2] border border-[#fecaca] text-[#991b1b] rounded-xl text-sm text-center font-medium">{otpErr}</div>
+                                )}
+                                <button onClick={handleVerify} disabled={otpStage === 'verifying'}
+                                        className={cls.btn + ' bg-gradient-to-r from-[#b22222] to-[#8b1a1a] shadow-[#b22222]/20'}>
+                                    {otpStage === 'verifying' ? <><Icon name="loader-2" size={18} className="animate-spin" /> 对证中…</> : '验证并完成注册'}
+                                </button>
+                                <div className="flex justify-between text-xs">
+                                    <button onClick={handleResend} disabled={otpStage === 'verifying'}
+                                            className="text-[#8b7355] hover:text-[#b22222] transition-colors font-bold">⟳ 重新发送</button>
+                                    <button onClick={() => { setOtpStage(null); setMsg(null); setOtp(['', '', '', '', '', '']); setOtpErr(''); setMode('register'); }}
+                                            className="text-[#8b7355] hover:text-[#2c1810] transition-colors font-bold">← 修改信息</button>
+                                </div>
+                            </div>
+                        ) : mode === 'login' ? (
+                            <div className="space-y-4">
+                                <div className="space-y-1">
+                                    <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">邮箱</label>
+                                    <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
+                                           className={cls.input} placeholder="请输入QQ邮箱" />
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">密码</label>
+                                    <input type="password" value={form.pw} onChange={e => setForm({ ...form, pw: e.target.value })}
+                                           className={cls.input} placeholder="请输入密码" />
+                                </div>
+                                <button onClick={handleLogin} disabled={loading}
+                                        className={cls.btn + (adminMode ? ' bg-gradient-to-r from-[#660874] to-[#4a0656] shadow-[#660874]/20' : ' bg-gradient-to-r from-[#2c1810] to-[#4a2c1a] shadow-[#2c1810]/20') + ' mt-6'}>
+                                    {loading ? <><Icon name="loader-2" size={18} className="animate-spin" /> 进入中…</> : '马上进入小羽书屋'}
+                                </button>
+                                <p className="text-center text-sm text-[#8b7355] pt-2 cursor-pointer hover:text-[#2c1810] transition-colors"
+                                   onClick={() => { setMode('register'); setMsg(null); setForm({ email: '', pw: '', name: '', dept: '', type: 'UNDERGRAD' }); setOtpStage(null); setOtp(['', '', '', '', '', '']); setOtpErr(''); }}>
+                                    暂无账号？点此注册小羽书屋账号 →
+                                </p>
+                                {!adminMode && (
+                                    <button onClick={onGuestLogin}
+                                            className={cls.btn + ' bg-white border-2 border-[#d4c5b2] text-[#8b7355] hover:bg-[#faf6f0] hover:border-[#8b7355] hover:text-[#2c1810] mt-2'}>
+                                        <Icon name="coffee" size={18} /> 跳过登录 / 先去逛逛
+                                    </button>
+                                )}
+                                <p className={`text-center text-[10px] pt-3 cursor-pointer hover:opacity-80 transition-opacity font-bold tracking-wider ${adminMode ? 'text-[#660874]' : 'text-[#b8a99a]'}`}
+                                   onClick={() => { setAdminMode(!adminMode); setMsg(null); }}>
+                                    {adminMode ? '← 返回普通读者登录' : '🔑 管理员入口'}
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="space-y-3 max-h-[420px] overflow-y-auto no-scrollbar pr-2">
+                                <div className="space-y-1">
+                                    <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">邮箱 *</label>
+                                    <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
+                                           className={cls.input} placeholder="请输入QQ邮箱" />
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">姓名 *</label>
+                                    <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
+                                           className={cls.input} placeholder="请输入您的姓名" />
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">密码 *</label>
+                                    <input type="password" value={form.pw} onChange={e => setForm({ ...form, pw: e.target.value })}
+                                           className={cls.input} placeholder="密码必须大于六位" />
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="space-y-1">
+                                        <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">身份</label>
+                                        <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}
+                                                className={cls.input}>
+                                            <option value="UNDERGRAD">本科生</option>
+                                            <option value="POSTGRAD">研究生</option>
+                                            <option value="STAFF">教职工</option>
+                                        </select>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[11px] font-bold text-[#8b7355] uppercase ml-2 tracking-widest">院系</label>
+                                        <input value={form.dept} onChange={e => setForm({ ...form, dept: e.target.value })}
+                                               className={cls.input} placeholder="如：翰林院" />
+                                    </div>
+                                </div>
+                                <button onClick={handleRegister} disabled={otpStage === 'sending'}
+                                        className={cls.btn + ' bg-gradient-to-r from-[#b22222] to-[#8b1a1a] shadow-[#b22222]/20 mt-4'}>
+                                    {otpStage === 'sending' ? <><Icon name="loader-2" size={18} className="animate-spin" /> 飞鸽传笺中…</> : '投帖注册'}
+                                </button>
+                                <p className="text-center text-sm text-[#8b7355] pt-2 pb-2 cursor-pointer hover:text-[#2c1810] transition-colors"
+                                   onClick={() => { setMode('login'); setMsg(null); setForm({ email: '', pw: '', name: '', dept: '', type: 'UNDERGRAD' }); setOtpStage(null); setOtp(['', '', '', '', '', '']); setOtpErr(''); }}>
+                                    ← 已有名帖，返回叩门
+                                </p>
+                            </div>
+                        )}
                     </div>
                 </div>
             );
         }
 
+        // ======================== Dashboard ========================
         function Dashboard({ user, db, setDb, onLogout }) {
             const [view, setView] = useState(user.role === 'ADMIN' ? 'admin_home' : 'reader_home');
             const [search, setSearch] = useState('');
-            const filteredBooks = db.books.filter(b => b.title.includes(search) || b.isbn.includes(search));
+            const filteredBooks = db.books.filter(b => b.title.includes(search) || b.isbn.includes(search) || (b.author && b.author.includes(search)));
 
             const borrowBook = (book) => {
-                if(book.available <= 0) return alert("暂无库存");
-                const newBooks = db.books.map(b => b.id === book.id ? {...b, available: b.available - 1} : b);
-                const newBorrow = { id: Date.now(), userId: user.id, bookTitle: book.title, date: new Date().toLocaleDateString(), due: '2024-05-12' };
-                setDb({...db, books: newBooks, borrowings: [newBorrow, ...db.borrowings]});
-                alert("预约成功！请在 24 小时内到馆取书。");
+                if (user.role === 'GUEST') return alert("借阅功能需要登录账号，请先登录或注册。");
+                if (user.status !== 'ACTIVE') return alert("您的账号状态异常，暂无借阅权限！");
+                if (book.available <= 0) return alert("暂无库存，请留意归还动态");
+                const currentCount = db.borrowings.filter(b => b.userId === user.id && b.status === 'BORROWED').length;
+                const limit = READER_TYPES[user.readerType || 'UNDERGRAD']?.limit || 5;
+                if (currentCount >= limit) return alert(`您当前的借阅额度为 ${limit} 本，已达上限！`);
+                const newBooks = db.books.map(b => b.id === book.id ? { ...b, available: b.available - 1 } : b);
+                const dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 30);
+                const newBorrow = {
+                    id: Date.now().toString(), userId: user.id, bookId: book.id,
+                    bookTitle: book.title, date: new Date().toLocaleDateString(),
+                    due: dueDate.toLocaleDateString(), status: 'BORROWED'
+                };
+                setDb({ ...db, books: newBooks, borrowings: [newBorrow, ...db.borrowings] });
+                alert("借阅成功！请在 30 日内归还。");
             };
-                        const deleteBook = async (bookId) => {
-                if (!confirm("确定要删除这本图书吗？此操作不可恢复！")) return;
-                
-                const { error } = await supabase
-                    .from('books')
-                    .delete()
-                    .eq('id', bookId);
 
-                if (error) {
-                    alert("删除失败：" + error.message);
-                } else {
-                    alert("✅ 图书已成功删除！");
-                }
+            const deleteBook = async (bookId) => {
+                if (!confirm("确定要下架并删除这本图书吗？")) return;
+                const { error } = await supabase.from('books').delete().eq('id', bookId);
+                if (error) alert("删除失败：" + error.message);
             };
 
             return (
                 <div className="flex h-screen overflow-hidden">
-                    <aside className="w-72 border-r bg-white p-8 flex flex-col">
-                        <div className="flex items-center gap-3 mb-12">
-                            <div className="w-10 h-10 thu-purple rounded-xl flex items-center justify-center text-white shadow-lg shadow-purple-200">
-                                <Icon name="library" size={20} />
-                            </div>
-                            <h2 className="text-xl font-black tracking-tighter">小羽的自习室</h2>
+                    <aside className="w-72 border-r border-[#d4c5b2]/30 bg-white p-8 flex flex-col z-20 shadow-sm">
+                        <div className="flex items-center gap-3 mb-10">
+                            <div className="w-12 h-12 rounded-xl bg-[#b22222] flex items-center justify-center text-white font-black text-lg shadow-lg shadow-[#b22222]/20"
+                                 style={{ fontFamily: 'serif' }}>書</div>
+                            <h2 className="text-xl font-black tracking-tighter text-[#2c1810]" style={{ fontFamily: 'serif' }}>小羽书屋</h2>
                         </div>
 
-                        <div className="flex-1 space-y-2">
-                            <NavBtn icon="home" label="系统首页" active={view.includes('home')} onClick={()=>setView(user.role === 'ADMIN' ? 'admin_home' : 'reader_home')} />
-                            <NavBtn icon="search" label="图书检索" active={view === 'search'} onClick={()=>setView('search')} />
-                            <NavBtn icon="bookmark" label="我的借阅" active={view === 'my'} onClick={()=>setView('my')} />
+                        <div className="flex-1 space-y-1.5">
+                            <NavBtn icon="home" label="系统首页" active={view.includes('home')}
+                                    onClick={() => setView(user.role === 'ADMIN' ? 'admin_home' : 'reader_home')} />
+                            <NavBtn icon="search" label="馆藏检索" active={view === 'search'} onClick={() => setView('search')} />
+                            <NavBtn icon="bookmark" label="我的借阅" active={view === 'my'} onClick={() => setView('my')} />
+                            <NavBtn icon="pen-line" label="读者书评" active={view === 'reviews'} onClick={() => setView('reviews')} />
                             {user.role === 'ADMIN' && (
-                                <div className="mt-8 pt-8 border-t border-slate-100">
-                                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-4 px-4 tracking-widest">管理功能</p>
-                                    <NavBtn icon="plus-circle" label="图书入库" active={view === 'add'} onClick={()=>setView('add')} />
-                                    <NavBtn icon="users" label="读者管理" active={view === 'users'} onClick={()=>setView('users')} />
+                                <div className="mt-8 pt-6 border-t border-[#d4c5b2]/30">
+                                    <p className="text-[10px] font-bold text-[#8b7355] uppercase mb-3 px-4 tracking-widest">馆务管理</p>
+                                    <NavBtn icon="plus-circle" label="图书入库编目" active={view === 'add'} onClick={() => setView('add')} />
+                                    <NavBtn icon="users" label="读者信息管理" active={view === 'users'} onClick={() => setView('users')} />
+                                    <NavBtn icon="messages-square" label="评价管理" active={view === 'evaluations'} onClick={() => setView('evaluations')} />
                                 </div>
                             )}
                         </div>
 
-                        <div className="mt-auto pt-8 border-t">
-                            <div className="flex items-center gap-3 mb-6 px-4">
-                                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-bold text-purple-600 border border-purple-100">{user.name[0]}</div>
+                        <div className="mt-auto pt-6 border-t border-[#d4c5b2]/30">
+                            <div className="flex items-center gap-3 mb-4 px-4 bg-[#faf6f0] p-3 rounded-2xl">
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-[#b22222] ${user.role === 'GUEST' ? 'bg-[#8b7355]/10 text-[#8b7355]' : 'bg-[#b22222]/10'}`}
+                                     style={{ fontFamily: 'serif' }}>{user.name[0]}</div>
                                 <div className="min-w-0">
-                                    <p className="text-sm font-bold truncate">{user.name}</p>
-                                    <p className="text-[10px] text-slate-400 font-medium tracking-tight uppercase">{user.role}</p>
+                                    <p className="text-sm font-bold truncate text-[#2c1810]">{user.name}</p>
+                                    <p className="text-[10px] text-[#8b7355] font-bold tracking-tight uppercase">
+                                        {user.role === 'GUEST' ? '访客模式 · 仅浏览' : user.role === 'ADMIN' ? '馆长：' + (user.account || '') : (user.email || user.account || '').split('@')[0]}
+                                    </p>
                                 </div>
                             </div>
-                            <button onClick={onLogout} className="w-full py-3 bg-red-50 text-red-500 rounded-xl text-xs font-bold hover:bg-red-100 transition-colors">安全登出</button>
+                            <button onClick={onLogout}
+                                    className={`w-full py-3 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 ${user.role === 'GUEST' ? 'bg-white border border-[#d4c5b2] text-[#8b7355] hover:bg-[#faf6f0]' : 'bg-white border border-red-100 text-red-500 hover:bg-red-50'}`}>
+                                <Icon name={user.role === 'GUEST' ? 'log-in' : 'log-out'} size={14} /> {user.role === 'GUEST' ? '登录 / 注册' : '安全登出'}
+                            </button>
                         </div>
                     </aside>
 
-                    <main className="flex-1 overflow-y-auto bg-slate-50 p-12">
-                        {view === 'reader_home' && <ReaderHome db={db} setView={setView} />}
-                        {view === 'admin_home' && <AdminHome db={db} />}
+                    <main className="flex-1 overflow-y-auto bg-[#faf6f0] p-12">
+                        {view === 'reader_home' && <ReaderHome db={db} setView={setView} user={user} />}
+                        {view === 'admin_home' && <AdminHome db={db} user={user} />}
                         {view === 'search' && <SearchView books={filteredBooks} onBorrow={borrowBook} search={search} setSearch={setSearch} user={user} deleteBook={deleteBook} />}
-                        {view === 'my' && <MyBorrowings borrowings={db.borrowings} userId={user.id} />}
-                        {view === 'add' && <AddBook db={db} setDb={setDb} />}
+                        {view === 'my' && <MyBorrowings db={db} user={user} />}
+                        {view === 'add' && <AddBook />}
+                        {view === 'users' && <UsersManagement db={db} setDb={setDb} />}
+                        {view === 'evaluations' && <EvaluationsManager user={user} />}
+                        {view === 'reviews' && <ReviewBoard />}
                     </main>
                 </div>
             );
         }
 
-        function ReaderHome({ db, setView }) {
+        // ======================== ReaderHome ========================
+        function ReaderHome({ db, setView, user }) {
+            const myBorrows = db.borrowings.filter(b => b.userId === user.id && b.status === 'BORROWED').length;
+            const limit = READER_TYPES[user.readerType || 'UNDERGRAD']?.limit || 5;
             return (
-                <div className="animate-in">
-                    <div className="thu-purple p-12 rounded-[3rem] text-white relative overflow-hidden mb-12 shadow-2xl shadow-purple-200">
-                        <div className="relative z-10">
-                            <h2 className="text-4xl font-black mb-4 tracking-tighter">下午好，同学</h2>
-                            <p className="text-purple-100 max-w-md leading-relaxed opacity-80">
-                                “书山有路勤为径，学海无涯苦作舟。” <br/>
-                                您当前有 0 本逾期图书，2 本正在借阅中。
-                            </p>
-                            <button onClick={()=>setView('search')} className="mt-8 px-8 py-3 bg-white text-purple-600 rounded-xl font-bold text-sm hover:scale-105 transition-transform">立即找书</button>
+                <div className="animate-in max-w-6xl mx-auto">
+                    <div className="bg-gradient-to-br from-[#2c1810] to-[#4a2c1a] p-12 rounded-[3rem] text-white relative overflow-hidden mb-12 shadow-2xl shadow-[#2c1810]/20">
+                        <div className="relative z-10 flex justify-between items-center">
+                            <div>
+                                <h2 className="text-4xl font-black mb-4 tracking-tighter" style={{ fontFamily: 'serif' }}>
+                                    {user.role === 'GUEST' ? '游客朋友，欢迎来访' : `${user.name} 同学，展卷安好`}
+                                </h2>
+                                <p className="text-[#b8a99a] max-w-md leading-relaxed font-medium">
+                                    {user.role === 'GUEST'
+                                        ? '"书卷多情似故人，晨昏忧乐每相亲。" 登录后即可借阅馆藏。'
+                                        : `"书卷多情似故人，晨昏忧乐每相亲。" 您当前的借阅额度为 ${myBorrows} / ${limit} 本。`
+                                    }
+                                </p>
+                                <button onClick={() => setView('search')}
+                                        className="mt-8 px-8 py-3 bg-white text-[#2c1810] rounded-xl font-bold text-sm hover:scale-105 transition-transform flex items-center gap-2">
+                                    <Icon name="search" size={16} /> 立即探索馆藏
+                                </button>
+                            </div>
+                            <div className="hidden lg:block text-right pr-10">
+                                <div className="text-6xl font-black text-white/20 mb-2">{new Date().getDate()}</div>
+                                <div className="text-xl font-bold text-white/60">{new Date().toLocaleString('zh-CN', { month: 'long', weekday: 'long' })}</div>
+                            </div>
                         </div>
-                        <Icon name="book-open" size={200} className="absolute right-[-20px] bottom-[-40px] opacity-10" />
+                        <Icon name="book-open" size={240} className="absolute right-[-40px] bottom-[-60px] opacity-10 rotate-[-15deg]" />
                     </div>
 
-                    <h3 className="text-2xl font-black mb-8 px-2 flex items-center gap-3">
-                        <div className="w-2 h-8 bg-purple-600 rounded-full"></div>
-                        新书速递
-                    </h3>
-                    <div className="grid grid-cols-4 gap-8">
-                        {db.books.map(b => (
-                            <div key={b.id} className="book-card bg-white p-5 rounded-[2rem] border border-slate-100 transition-all cursor-pointer">
-                                <img src={b.cover} className="w-full aspect-[3/4] rounded-2xl object-cover mb-4 shadow-md" />
-                                <h4 className="font-bold text-slate-800 truncate">{b.title}</h4>
-                                <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">{b.author}</p>
+                    <div className="flex items-center justify-between mb-8 px-2">
+                        <h3 className="text-2xl font-black flex items-center gap-3 text-[#2c1810]" style={{ fontFamily: 'serif' }}>
+                            <div className="w-2 h-8 bg-[#b22222] rounded-full shadow-lg shadow-[#b22222]/20"></div>
+                            新书速递
+                        </h3>
+                        <button onClick={() => setView('search')} className="text-sm font-bold text-[#8b7355] hover:text-[#2c1810]">查看全部图书 →</button>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                        {db.books.slice(0, 5).map(b => (
+                            <div key={b.id} onClick={() => setView('search')}
+                                 className="book-card bg-white p-4 rounded-3xl border border-[#d4c5b2]/30 transition-all cursor-pointer group">
+                                <div className="relative overflow-hidden rounded-2xl mb-4 shadow-sm group-hover:shadow-lg transition-all aspect-[3/4]">
+                                    <img src={b.cover} className="w-full h-full object-cover" />
+                                    {b.available === 0 && (
+                                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                                            <span className="px-3 py-1 bg-white/90 text-[#2c1810] text-xs font-bold rounded-full">已借罄</span>
+                                        </div>
+                                    )}
+                                </div>
+                                <h4 className="font-bold text-[#2c1810] truncate text-sm">{b.title}</h4>
+                                <p className="text-[10px] text-[#8b7355] font-bold uppercase mt-1 truncate">{b.author}</p>
                             </div>
                         ))}
                     </div>
@@ -241,69 +637,180 @@
             );
         }
 
+        // ======================== AdminHome ========================
+        function AdminHome({ db, user }) {
+            const activeUsers = db.users.filter(u => u.status === 'ACTIVE').length || db.books.length > 0 ? (db.users.length || 1) : 1;
+            const inBorrow = db.borrowings.filter(b => b.status === 'BORROWED').length;
+            const totalBooks = db.books.reduce((a, b) => a + (b.total || 0), 0);
+            const stats = [
+                { label: '在馆藏书 (册)', val: totalBooks, icon: 'book', color: 'red' },
+                { label: '活跃读者 (人)', val: activeUsers, icon: 'users', color: 'amber' },
+                { label: '当前借出 (次)', val: inBorrow, icon: 'repeat', color: 'green' }
+            ];
+            const colorMap = { red: 'bg-[#b22222]/10 text-[#b22222]', amber: 'bg-[#8b7355]/10 text-[#8b7355]', green: 'bg-[#2d5a27]/10 text-[#2d5a27]' };
+
+            return (
+                <div className="animate-in max-w-5xl mx-auto">
+                    <h2 className="text-3xl font-black mb-8 text-[#2c1810]" style={{ fontFamily: 'serif' }}>系统运行全景仪表盘</h2>
+                    <div className="grid grid-cols-3 gap-6 mb-10">
+                        {stats.map(s => (
+                            <div key={s.label} className="bg-white p-6 rounded-[2rem] border border-[#d4c5b2]/30 shadow-sm relative overflow-hidden group">
+                                <div className="relative z-10">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform ${colorMap[s.color]}`}>
+                                            <Icon name={s.icon} />
+                                        </div>
+                                        <span className="text-4xl font-black text-[#2c1810] tracking-tighter">{s.val}</span>
+                                    </div>
+                                    <p className="text-[11px] font-bold text-[#8b7355] uppercase tracking-widest">{s.label}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-8">
+                        <div className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-[#d4c5b2]/30">
+                            <h3 className="text-lg font-black mb-6 text-[#2c1810]" style={{ fontFamily: 'serif' }}>实时馆藏动态</h3>
+                            <div className="space-y-5">
+                                {db.books.slice(0, 4).map(b => (
+                                    <div key={b.id} className="flex items-center justify-between group">
+                                        <div className="flex items-center gap-4">
+                                            <div className="w-10 h-14 bg-[#faf6f0] rounded-lg overflow-hidden border border-[#d4c5b2]/30 shadow-sm">
+                                                <img src={b.cover} className="w-full h-full object-cover" />
+                                            </div>
+                                            <div>
+                                                <p className="font-bold text-sm text-[#2c1810]">{b.title}</p>
+                                                <p className="text-[10px] text-[#8b7355] mt-1">{b.location}</p>
+                                            </div>
+                                        </div>
+                                        <div className="flex flex-col items-end gap-1">
+                                            <span className="text-xs font-bold text-[#2c1810]">{b.available} / {b.total}</span>
+                                            <div className="w-24 bg-[#faf6f0] h-1.5 rounded-full overflow-hidden">
+                                                <div className="h-full bg-[#b22222]" style={{ width: `${b.total > 0 ? (b.available / b.total) * 100 : 0}%` }}></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-[2.5rem] p-8 shadow-sm border border-[#d4c5b2]/30">
+                            <h3 className="text-lg font-black mb-6 text-[#2c1810]" style={{ fontFamily: 'serif' }}>最新注册读者</h3>
+                            <div className="space-y-4">
+                                {[...db.users].slice(-5).reverse().map(u => (
+                                    <div key={u.id} className="flex items-center justify-between p-3 rounded-2xl hover:bg-[#faf6f0] transition-colors">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 rounded-full bg-[#8b7355]/10 text-[#8b7355] flex items-center justify-center font-bold text-sm">{u.name?.[0] || '?'}</div>
+                                            <div>
+                                                <p className="font-bold text-sm text-[#2c1810]">{u.name}</p>
+                                                <p className="text-[10px] text-[#8b7355]">{u.department}</p>
+                                            </div>
+                                        </div>
+                                        <span className="px-3 py-1 bg-[#faf6f0] text-[#8b7355] rounded-md text-[10px] font-bold">
+                                            {READER_TYPES[u.readerType]?.label || '读者'}
+                                        </span>
+                                    </div>
+                                ))}
+                                {db.users.length === 0 && <p className="text-center text-[#8b7355] text-sm py-8">暂无注册读者</p>}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ======================== SearchView ========================
         function SearchView({ books, onBorrow, search, setSearch, user, deleteBook }) {
             return (
-                <div className="animate-in">
-                    <div className="relative mb-10">
-                        <Icon name="search" className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400" />
-                        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="输入书名、作者或 ISBN 搜索馆藏..." className="w-full pl-16 pr-8 py-5 bg-white rounded-3xl border-none shadow-sm focus:ring-4 ring-purple-100 outline-none text-lg transition-all" />
+                <div className="animate-in max-w-6xl mx-auto">
+                    <div className="relative mb-8 max-w-2xl mx-auto">
+                        <Icon name="search" className="absolute left-6 top-1/2 -translate-y-1/2 text-[#8b7355]" size={20} />
+                        <input value={search} onChange={e => setSearch(e.target.value)}
+                               placeholder="输入书名、作者或 ISBN 检索馆藏…"
+                               className="w-full pl-14 pr-8 py-4 bg-white rounded-2xl border border-[#d4c5b2]/30 shadow-sm focus:ring-4 ring-[#8b4513]/10 outline-none text-base transition-all font-medium text-[#2c1810] placeholder-[#b8a99a]" />
                     </div>
-                    <div className="grid grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         {books.map(b => (
-                            <div key={b.id} className="bg-white p-6 rounded-[2.5rem] flex gap-6 border border-slate-100 hover:shadow-xl transition-all">
-                                <img src={b.cover} className="w-32 h-44 rounded-2xl object-cover shadow-sm" />
-                                <div className="flex-1 py-2 flex flex-col">
-                                    <div className="px-3 py-1 bg-slate-100 text-slate-500 rounded-full text-[10px] font-bold w-fit mb-2">{b.category}</div>
-                                    <h4 className="text-xl font-black text-slate-800 leading-tight mb-2">{b.title}</h4>
-                                    <p className="text-sm text-slate-400 mb-4">{b.author} · {b.location}</p>
-                                                                                                    <div className="mt-auto flex items-center justify-between">
-                                    <span className={`text-sm font-bold ${b.available > 0 ? 'text-green-500' : 'text-red-400'}`}>
-                                        {b.available > 0 ? `馆藏 ${b.available} 本` : '暂时借罄'}
-                                    </span>
-                                    <div className="flex gap-2">
-                                        <button onClick={()=>onBorrow(b)} disabled={b.available === 0} className="px-6 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold disabled:bg-slate-200 transition-all active:scale-95 shadow-lg shadow-purple-100">预约</button>
+                            <div key={b.id} className="bg-white p-5 rounded-[2rem] flex gap-5 border border-[#d4c5b2]/30 hover:shadow-xl hover:-translate-y-1 transition-all group">
+                                <img src={b.cover} className="w-28 h-40 rounded-xl object-cover shadow-md border border-[#d4c5b2]/30 group-hover:scale-105 transition-transform" />
+                                <div className="flex-1 py-1 flex flex-col min-w-0">
+                                    <div className="flex justify-between items-start mb-2">
+                                        <div className="px-2.5 py-1 bg-[#faf6f0] text-[#8b7355] rounded-md text-[10px] font-bold w-fit truncate max-w-[120px]">{b.category}</div>
                                         {user && user.role === 'ADMIN' && (
-                                            <button 
-                                                onClick={() => deleteBook(b.id)} 
-                                                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-bold transition-all active:scale-95"
-                                            >
-                                                删除
-                                            </button>
+                                            <button onClick={() => deleteBook(b.id)} className="text-[#b8a99a] hover:text-red-500 p-1 transition-colors"><Icon name="trash-2" size={16} /></button>
                                         )}
                                     </div>
-                                </div>
+                                    <h4 className="text-lg font-black text-[#2c1810] leading-tight mb-1 truncate">{b.title}</h4>
+                                    <p className="text-xs text-[#8b7355] mb-4 truncate">{b.author} · 排架: {b.location}</p>
+                                    <div className="mt-auto flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <div className={`w-2 h-2 rounded-full ${b.available > 0 ? 'bg-green-500' : 'bg-red-400'}`}></div>
+                                            <span className={`text-xs font-bold ${b.available > 0 ? 'text-[#2c1810]' : 'text-red-400'}`}>
+                                                {b.available > 0 ? `在架可借 ${b.available} 册` : '已全部借出'}
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            {b.pdf_url && b.pdf_url.trim() !== '' && (
+                                                <button onClick={(e) => { e.stopPropagation(); window.open(b.pdf_url, '_blank'); }}
+                                                        className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md transition-all active:scale-95">
+                                                    <Icon name="book-open" size={14} /> 阅读 PDF
+                                                </button>
+                                            )}
+                                            <button onClick={() => onBorrow(b)} disabled={b.available === 0 || user.role === 'GUEST'}
+                                                    className={`px-5 py-2 rounded-xl text-xs font-bold disabled:bg-[#d4c5b2] disabled:text-[#b8a99a] transition-all active:scale-95 shadow-md hover:shadow-lg ${user.role === 'GUEST' ? 'bg-[#8b7355] hover:bg-[#6b5a45] text-white' : 'bg-[#2c1810] text-white'}`}>
+                                                {user.role === 'GUEST' ? '请先登录' : '借阅'}
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         ))}
+                        {books.length === 0 && (
+                            <div className="col-span-full py-20 text-center text-[#b8a99a]">
+                                <Icon name="search-x" size={48} className="mx-auto mb-4 opacity-50" />
+                                <p>抱歉，未检索到相关文献</p>
+                            </div>
+                        )}
                     </div>
                 </div>
             );
         }
 
-        function MyBorrowings({ borrowings, userId }) {
-            const mine = borrowings.filter(b => b.userId === userId);
+        // ======================== MyBorrowings ========================
+        function MyBorrowings({ db, user }) {
+            const mine = db.borrowings.filter(b => b.userId === user.id);
             return (
-                <div className="animate-in">
-                    <h2 className="text-3xl font-black mb-10">我的借阅清单</h2>
+                <div className="animate-in max-w-4xl mx-auto">
+                    <h2 className="text-3xl font-black mb-8 text-[#2c1810]" style={{ fontFamily: 'serif' }}>借阅历史与清单</h2>
                     <div className="space-y-4">
                         {mine.length === 0 ? (
-                            <div className="py-20 text-center bg-white rounded-[3rem] border-2 border-dashed border-slate-200">
-                                <Icon name="coffee" size={40} className="mx-auto text-slate-300 mb-4" />
-                                <p className="text-slate-400 font-medium">暂时没有在借图书，去书海走走吧！</p>
+                            <div className="py-24 text-center bg-white rounded-[3rem] border-2 border-dashed border-[#d4c5b2]/50">
+                                <div className="w-20 h-20 bg-[#faf6f0] rounded-full flex items-center justify-center mx-auto mb-6">
+                                    <Icon name="coffee" size={32} className="text-[#b8a99a]" />
+                                </div>
+                                <h4 className="text-lg font-bold text-[#2c1810] mb-2">借阅记录空空如也</h4>
+                                <p className="text-sm text-[#8b7355] font-medium">去书海走走，发现你人生的下一本好书吧！</p>
                             </div>
                         ) : (
                             mine.map(m => (
-                                <div key={m.id} className="bg-white p-6 rounded-3xl border border-slate-100 flex items-center justify-between shadow-sm">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-12 h-12 bg-purple-50 text-purple-600 rounded-2xl flex items-center justify-center">
-                                            <Icon name="book" />
+                                <div key={m.id} className="bg-white p-5 rounded-3xl border border-[#d4c5b2]/30 flex items-center justify-between shadow-sm hover:shadow-md transition-shadow">
+                                    <div className="flex items-center gap-5">
+                                        <div className="w-14 h-14 bg-[#b22222]/10 text-[#b22222] rounded-2xl flex items-center justify-center shadow-inner">
+                                            <Icon name="book" size={24} />
                                         </div>
                                         <div>
-                                            <h5 className="font-bold text-slate-800">{m.bookTitle}</h5>
-                                            <p className="text-[10px] text-slate-400 font-medium uppercase tracking-tighter">借阅于 {m.date} · 应还日期 {m.due}</p>
+                                            <h5 className="font-black text-[#2c1810] text-lg mb-1">{m.bookTitle}</h5>
+                                            <p className="text-xs text-[#8b7355] font-medium">
+                                                借出日期: <span className="text-[#2c1810]">{m.date}</span> &nbsp;|&nbsp;
+                                                应还日期: <span className="text-[#b22222] font-bold">{m.due}</span>
+                                            </p>
                                         </div>
                                     </div>
-                                    <span className="px-4 py-1.5 bg-green-50 text-green-600 rounded-full text-[10px] font-black uppercase tracking-widest">在借中</span>
+                                    <div className="flex flex-col items-end gap-2">
+                                        <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest ${m.status === 'BORROWED' ? 'bg-green-50 text-green-600' : 'bg-[#faf6f0] text-[#8b7355]'}`}>
+                                            {m.status === 'BORROWED' ? '在借中' : '已归还'}
+                                        </span>
+                                    </div>
                                 </div>
                             ))
                         )}
@@ -312,60 +819,418 @@
             );
         }
 
-        function AdminHome({ db }) {
-            const stats = [
-                { label: '在馆书本', val: db.books.reduce((a, b) => a + b.total, 0), icon: 'book' },
-                { label: '活跃读者', val: db.users.length, icon: 'users' },
-                { label: '今日流通', val: db.borrowings.length, icon: 'repeat' }
-            ];
+        // ======================== UsersManagement ========================
+        function UsersManagement({ db, setDb }) {
+            const [searchTerm, setSearchTerm] = useState('');
+            const [editingUser, setEditingUser] = useState(null);
+            const [showForm, setShowForm] = useState(false);
+
+            const filteredUsers = useMemo(() => {
+                return db.users.filter(u =>
+                    (u.name || '').includes(searchTerm) ||
+                    (u.account || '').includes(searchTerm) ||
+                    (u.department || '').includes(searchTerm)
+                );
+            }, [db.users, searchTerm]);
+
+            const handleDelete = (id) => {
+                if (confirm("确定要删除该读者吗？")) {
+                    setDb(prev => ({ ...prev, users: prev.users.filter(u => u.id !== id) }));
+                }
+            };
+
+            const toggleStatus = (u) => {
+                const newStatus = u.status === 'ACTIVE' ? 'FROZEN' : 'ACTIVE';
+                if (confirm(`确定要${newStatus === 'FROZEN' ? '冻结' : '激活'}读者 ${u.name} 吗？`)) {
+                    setDb(prev => ({ ...prev, users: prev.users.map(x => x.id === u.id ? { ...x, status: newStatus } : x) }));
+                }
+            };
+
+            const handleSaveForm = (formData) => {
+                if (editingUser) {
+                    setDb(prev => ({ ...prev, users: prev.users.map(u => u.id === editingUser.id ? { ...u, ...formData } : u) }));
+                } else {
+                    const newUser = {
+                        id: Date.now().toString(),
+                        account: formData.account,
+                        password: (formData.account || '').slice(-6),
+                        status: 'ACTIVE',
+                        role: formData.role || 'READER',
+                        ...formData
+                    };
+                    setDb(prev => ({ ...prev, users: [newUser, ...prev.users] }));
+                    sendNewReaderNotification(newUser);
+                }
+                setShowForm(false); setEditingUser(null);
+            };
+
+            const exportCSV = () => {
+                const headers = ["邮箱/账号", "姓名", "院系", "类型", "状态"];
+                const rows = filteredUsers.map(u => [u.account, u.name, u.department, READER_TYPES[u.readerType]?.label || '未知', u.status === 'ACTIVE' ? '正常' : '冻结']);
+                const csvContent = "data:text/csv;charset=utf-8,﻿" + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+                const link = document.createElement("a");
+                link.setAttribute("href", encodeURI(csvContent));
+                link.setAttribute("download", `读者名册_${new Date().toLocaleDateString()}.csv`);
+                document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            };
+
             return (
-                <div className="animate-in">
-                    <h2 className="text-3xl font-black mb-10">系统管理全景</h2>
-                    <div className="grid grid-cols-3 gap-8 mb-12">
-                        {stats.map(s => (
-                            <div key={s.label} className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                                <div className="flex items-center justify-between mb-4">
-                                    <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-purple-600"><Icon name={s.icon} /></div>
-                                    <span className="text-4xl font-black text-slate-800 tracking-tighter">{s.val}</span>
-                                </div>
-                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">{s.label}</p>
-                            </div>
-                        ))}
+                <div className="animate-in max-w-6xl mx-auto">
+                    <div className="flex justify-between items-end mb-8">
+                        <div>
+                            <h2 className="text-3xl font-black text-[#2c1810]" style={{ fontFamily: 'serif' }}>读者信息管理</h2>
+                            <p className="text-[#8b7355] text-sm mt-2">共 {filteredUsers.length} 位注册读者在册</p>
+                        </div>
+                        <div className="flex gap-3">
+                            <button onClick={exportCSV} className="px-5 py-2.5 bg-white border border-[#d4c5b2]/30 text-[#8b7355] rounded-xl font-bold text-sm hover:bg-[#faf6f0] transition-all flex items-center gap-2 shadow-sm">
+                                <Icon name="download" size={16} /> 导出名单
+                            </button>
+                            <button onClick={() => { setEditingUser(null); setShowForm(true); }}
+                                    className="px-5 py-2.5 bg-gradient-to-r from-[#b22222] to-[#8b1a1a] text-white rounded-xl font-bold text-sm shadow-lg shadow-[#b22222]/20 hover:scale-105 active:scale-95 transition-all flex items-center gap-2">
+                                <Icon name="user-plus" size={16} /> 新增读者
+                            </button>
+                        </div>
                     </div>
-                    <div className="bg-white rounded-[3rem] p-10 shadow-sm border border-slate-100">
-                        <h3 className="text-xl font-black mb-8">馆藏库动态</h3>
-                        <div className="space-y-4">
-                            {db.books.map(b => (
-                                <div key={b.id} className="flex items-center justify-between py-4 border-b last:border-0 border-slate-50">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-10 h-14 bg-slate-50 rounded-lg overflow-hidden border">
-                                            <img src={b.cover} className="w-full h-full object-cover" />
-                                        </div>
-                                        <p className="font-bold text-sm">{b.title}</p>
-                                    </div>
-                                    <div className="flex items-center gap-8">
-                                        <div className="w-32 bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                                            <div className="h-full bg-purple-600" style={{ width: `${(b.available/b.total)*100}%` }}></div>
-                                        </div>
-                                        <span className="text-[10px] font-bold text-slate-500 w-12">{b.available} / {b.total}</span>
-                                    </div>
-                                </div>
-                            ))}
+
+                    <div className="bg-white rounded-[2rem] border border-[#d4c5b2]/30 shadow-sm overflow-hidden">
+                        <div className="p-4 border-b border-[#d4c5b2]/20 flex items-center gap-4 bg-[#faf6f0]/50">
+                            <div className="relative flex-1 max-w-md">
+                                <Icon name="search" size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#8b7355]" />
+                                <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                                       placeholder="搜索姓名、邮箱、院系…"
+                                       className="w-full pl-10 pr-4 py-2 bg-white rounded-lg border border-[#d4c5b2]/30 shadow-sm focus:ring-2 ring-[#8b4513]/20 outline-none text-sm transition-all text-[#2c1810]" />
+                            </div>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                                <thead>
+                                    <tr className="bg-[#faf6f0] text-[11px] font-black text-[#8b7355] uppercase tracking-widest border-b border-[#d4c5b2]/20">
+                                        <th className="p-4 pl-6">读者信息</th>
+                                        <th className="p-4">院系/部门</th>
+                                        <th className="p-4">角色类型</th>
+                                        <th className="p-4">借阅情况</th>
+                                        <th className="p-4">账号状态</th>
+                                        <th className="p-4 pr-6 text-right">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-[#d4c5b2]/10">
+                                    {filteredUsers.map(u => {
+                                        const borrows = db.borrowings.filter(b => b.userId === u.id && b.status === 'BORROWED').length;
+                                        return (
+                                            <tr key={u.id} className="hover:bg-[#faf6f0]/50 transition-colors">
+                                                <td className="p-4 pl-6">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-10 h-10 rounded-full bg-[#b22222]/10 text-[#b22222] flex items-center justify-center font-bold text-sm">{(u.name || '?')[0]}</div>
+                                                        <div>
+                                                            <p className="font-bold text-[#2c1810] text-sm">{u.name}</p>
+                                                            <p className="text-[11px] text-[#8b7355] mt-0.5">{u.account}</p>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="p-4 text-sm text-[#2c1810]">{u.department}</td>
+                                                <td className="p-4">
+                                                    <span className="px-3 py-1 bg-[#faf6f0] text-[#8b7355] rounded-md text-xs font-bold">
+                                                        {u.role === 'ADMIN' ? '管理员' : READER_TYPES[u.readerType]?.label || '未知'}
+                                                    </span>
+                                                </td>
+                                                <td className="p-4">
+                                                    <span className="text-sm font-bold text-[#b22222]">{borrows}</span>
+                                                    <span className="text-xs text-[#8b7355]"> / {READER_TYPES[u.readerType]?.limit || 0}</span>
+                                                </td>
+                                                <td className="p-4">
+                                                    <span className={`px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider ${u.status === 'ACTIVE' ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-500'}`}>
+                                                        {u.status === 'ACTIVE' ? '正常' : '已冻结'}
+                                                    </span>
+                                                </td>
+                                                <td className="p-4 pr-6 text-right space-x-2">
+                                                    <button onClick={() => { setEditingUser(u); setShowForm(true); }} title="编辑"
+                                                            className="p-2 text-[#8b7355] hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Icon name="edit" size={16} /></button>
+                                                    <button onClick={() => toggleStatus(u)} title={u.status === 'ACTIVE' ? '冻结' : '解冻'}
+                                                            className={`p-2 rounded-lg transition-colors ${u.status === 'ACTIVE' ? 'text-[#8b7355] hover:text-red-500 hover:bg-red-50' : 'text-red-500 bg-red-50 hover:bg-red-100'}`}>
+                                                        <Icon name={u.status === 'ACTIVE' ? 'lock' : 'unlock'} size={16} />
+                                                    </button>
+                                                    {u.role !== 'ADMIN' && (
+                                                        <button onClick={() => handleDelete(u.id)} title="删除"
+                                                                className="p-2 text-[#8b7355] hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Icon name="trash-2" size={16} /></button>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                    {filteredUsers.length === 0 && (
+                                        <tr><td colSpan="6" className="p-8 text-center text-[#8b7355]">未找到匹配的读者记录</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {showForm && (
+                        <UserFormModal user={editingUser} onClose={() => setShowForm(false)} onSave={handleSaveForm} />
+                    )}
+                </div>
+            );
+        }
+
+        // ======================== UserFormModal ========================
+        function UserFormModal({ user, onClose, onSave }) {
+            const [form, setForm] = useState(user || { account: '', name: '', department: '', phone: '', email: '', readerType: 'UNDERGRAD', role: 'READER' });
+            return (
+                <div className="fixed inset-0 bg-[#2c1810]/40 backdrop-blur-sm flex items-center justify-center z-50 animate-in">
+                    <div className="bg-white p-8 rounded-[2rem] shadow-2xl w-[500px] border border-[#d4c5b2]/30">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-xl font-black text-[#2c1810]" style={{ fontFamily: 'serif' }}>{user ? '编辑读者信息' : '新增读者档案'}</h3>
+                            <button onClick={onClose} className="p-2 text-[#8b7355] hover:bg-[#faf6f0] rounded-full"><Icon name="x" size={20} /></button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <Field label="邮箱/账号" value={form.account} onChange={v => setForm({ ...form, account: v })} disabled={!!user} />
+                            <Field label="真实姓名" value={form.name} onChange={v => setForm({ ...form, name: v })} />
+                            <Field label="院系/部门" value={form.department} onChange={v => setForm({ ...form, department: v })} />
+                            <Field label="联系电话" value={form.phone} onChange={v => setForm({ ...form, phone: v })} />
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black text-[#8b7355] uppercase ml-2 tracking-widest">读者类型</label>
+                                <select value={form.readerType} onChange={e => setForm({ ...form, readerType: e.target.value })}
+                                        className="w-full p-3 bg-[#faf6f0] border border-[#d4c5b2]/30 rounded-xl text-sm focus:ring-2 ring-[#8b4513]/30 outline-none text-[#2c1810]">
+                                    <option value="UNDERGRAD">本科生 (额度10本)</option>
+                                    <option value="POSTGRAD">研究生 (额度20本)</option>
+                                    <option value="STAFF">教职工 (额度30本)</option>
+                                </select>
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black text-[#8b7355] uppercase ml-2 tracking-widest">系统角色</label>
+                                <select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}
+                                        className="w-full p-3 bg-[#faf6f0] border border-[#d4c5b2]/30 rounded-xl text-sm focus:ring-2 ring-[#8b4513]/30 outline-none text-[#2c1810]">
+                                    <option value="READER">普通读者</option>
+                                    <option value="ADMIN">系统管理员</option>
+                                </select>
+                            </div>
+                        </div>
+                        {!user && <p className="text-xs text-amber-600 mt-4 bg-amber-50 p-3 rounded-lg border border-amber-100">💡 提示：新读者的初始密码将自动设置为账号后6位。</p>}
+                        <div className="flex gap-3 mt-8">
+                            <button onClick={onClose} className="flex-1 py-3 bg-[#faf6f0] text-[#8b7355] rounded-xl font-bold hover:bg-[#d4c5b2]/20 transition-colors">取消</button>
+                            <button onClick={() => onSave(form)} className="flex-1 py-3 bg-gradient-to-r from-[#b22222] to-[#8b1a1a] text-white rounded-xl font-bold shadow-lg shadow-[#b22222]/20 hover:scale-105 active:scale-95 transition-all">保存信息</button>
                         </div>
                     </div>
                 </div>
             );
         }
 
-        function AddBook({ db, setDb }) {
-            const [f, setF] = useState(() => {
-                const savedDraft = localStorage.getItem(DRAFT_KEY);
-                return savedDraft ? JSON.parse(savedDraft) : { title: '', isbn: '', author: '', category: '通用', total: 5, cover: '', location: '' };
-            });
+        // ======================== ReviewBoard（公开评价看板） ========================
+        function ReviewBoard() {
+            const [evals, setEvals] = useState([]);
+            const [loading, setLoading] = useState(true);
 
             useEffect(() => {
-                localStorage.setItem(DRAFT_KEY, JSON.stringify(f));
-            }, [f]);
+                const fetchEvals = async () => {
+                    const { data, error } = await supabase.from('evaluations').select('*').order('created_at', { ascending: false });
+                    if (!error && data) setEvals(data);
+                    setLoading(false);
+                };
+                fetchEvals();
+            }, []);
+
+            if (loading) {
+                return (
+                    <div className="animate-in max-w-4xl mx-auto text-center py-20">
+                        <Icon name="loader-2" size={32} className="animate-spin mx-auto mb-4 text-[#8b7355]" />
+                        <p className="text-[#8b7355] text-sm">展笺阅卷中…</p>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="animate-in max-w-6xl mx-auto">
+                    <div className="mb-8">
+                        <h2 className="text-3xl font-black text-[#2c1810]" style={{ fontFamily: 'serif' }}>读者书评 · 评价看板</h2>
+                        <p className="text-[#8b7355] text-sm mt-2">共 {evals.length} 封素笺 · 字字珠玑，落墨生香</p>
+                    </div>
+
+                    {evals.length === 0 ? (
+                        <div className="py-24 text-center bg-white rounded-[3rem] border-2 border-dashed border-[#d4c5b2]/50">
+                            <div className="w-20 h-20 bg-[#faf6f0] rounded-full flex items-center justify-center mx-auto mb-6">
+                                <Icon name="inbox" size={32} className="text-[#b8a99a]" />
+                            </div>
+                            <h4 className="text-lg font-bold text-[#2c1810] mb-2" style={{ fontFamily: 'serif' }}>尚无素笺投递</h4>
+                            <p className="text-sm text-[#8b7355]">待读者落墨挥毫，笺至自然可见</p>
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            {evals.map(e => (
+                                <div key={e.id} className="bg-white p-6 rounded-[2rem] border border-[#d4c5b2]/30 shadow-sm hover:shadow-md transition-shadow">
+                                    <div className="flex items-center justify-between mb-4 pb-4 border-b border-[#d4c5b2]/20">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 rounded-full bg-[#b22222]/10 text-[#b22222] flex items-center justify-center font-bold text-sm"
+                                                 style={{ fontFamily: 'serif' }}>
+                                                {(e.q2_meet || '匿')[0]}
+                                            </div>
+                                            <div>
+                                                <p className="font-bold text-[#2c1810] text-sm">{e.q2_meet || '匿名读者'}</p>
+                                                <p className="text-[10px] text-[#8b7355]">{new Date(e.created_at).toLocaleString('zh-CN')}</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-[10px] text-[#b8a99a] font-mono">#{String(e.id).padStart(4, '0')}</span>
+                                    </div>
+                                    <div className="space-y-2.5 text-sm">
+                                        <div className="flex gap-2">
+                                            <span className="text-[#b22222] font-bold shrink-0">Q1 相识</span>
+                                            <span className="text-[#2c1810]">{e.q1_meet || '-'}</span>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <span className="text-[#b22222] font-bold shrink-0">Q2 关系</span>
+                                            <span className="text-[#2c1810]">{e.q2_relation || '-'}</span>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <span className="text-[#8b7355] font-bold shrink-0">Q3 初印</span>
+                                            <span className="text-[#2c1810] italic">{e.q3_first_impression || '未填写'}</span>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <span className="text-[#8b7355] font-bold shrink-0">Q4 为人</span>
+                                            <span className="text-[#2c1810] italic">{e.q4_personality || '未填写'}</span>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <span className="text-[#8b7355] font-bold shrink-0">Q5 寄语</span>
+                                            <span className="text-[#2c1810] italic">{e.q5_message || '未填写'}</span>
+                                        </div>
+                                    </div>
+                                    {e.photo_url && (
+                                        <div className="mt-4 pt-4 border-t border-[#d4c5b2]/20">
+                                            <img src={e.photo_url}
+                                                 alt="评价附图"
+                                                 className="w-full max-h-64 object-cover rounded-xl border border-[#d4c5b2]/30 cursor-pointer hover:shadow-lg transition-shadow"
+                                                 onClick={() => window.open(e.photo_url, '_blank')} />
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ======================== EvaluationsManager ========================
+        function EvaluationsManager({ user }) {
+            const [evals, setEvals] = useState([]);
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                const fetchEvals = async () => {
+                    const { data, error } = await supabase.from('evaluations').select('*').order('created_at', { ascending: false });
+                    if (!error && data) setEvals(data);
+                    setLoading(false);
+                };
+                fetchEvals();
+            }, []);
+
+            // 仅限硬编码管理员
+            if (user.account !== '18723992791') {
+                return (
+                    <div className="animate-in max-w-4xl mx-auto text-center py-20">
+                        <div className="w-16 h-16 mx-auto mb-5 rounded-full bg-[#fef2f2] flex items-center justify-center text-[#b22222]">
+                            <Icon name="shield-alert" size={28} />
+                        </div>
+                        <h2 className="text-xl font-black text-[#2c1810] mb-2" style={{ fontFamily: 'serif' }}>权限不足</h2>
+                        <p className="text-[#8b7355] text-sm">此视图仅对馆长开放</p>
+                    </div>
+                );
+            }
+
+            if (loading) {
+                return (
+                    <div className="animate-in max-w-4xl mx-auto text-center py-20">
+                        <Icon name="loader-2" size={32} className="animate-spin mx-auto mb-4 text-[#8b7355]" />
+                        <p className="text-[#8b7355] text-sm">展笺阅卷中…</p>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="animate-in max-w-6xl mx-auto">
+                    <div className="flex justify-between items-end mb-8">
+                        <div>
+                            <h2 className="text-3xl font-black text-[#2c1810]" style={{ fontFamily: 'serif' }}>评价管理</h2>
+                            <p className="text-[#8b7355] text-sm mt-2">共 {evals.length} 封素笺投递</p>
+                        </div>
+                    </div>
+
+                    {evals.length === 0 ? (
+                        <div className="py-24 text-center bg-white rounded-[3rem] border-2 border-dashed border-[#d4c5b2]/50">
+                            <div className="w-20 h-20 bg-[#faf6f0] rounded-full flex items-center justify-center mx-auto mb-6">
+                                <Icon name="inbox" size={32} className="text-[#b8a99a]" />
+                            </div>
+                            <h4 className="text-lg font-bold text-[#2c1810] mb-2" style={{ fontFamily: 'serif' }}>尚无素笺投递</h4>
+                            <p className="text-sm text-[#8b7355]">待读者落墨挥毫，笺至自然可见</p>
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            {evals.map((e, i) => (
+                                <div key={e.id} className="bg-white p-6 rounded-[2rem] border border-[#d4c5b2]/30 shadow-sm hover:shadow-md transition-shadow">
+                                    {/* 头信息 */}
+                                    <div className="flex items-center justify-between mb-4 pb-4 border-b border-[#d4c5b2]/20">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-10 h-10 rounded-full bg-[#b22222]/10 text-[#b22222] flex items-center justify-center font-bold text-sm"
+                                                 style={{ fontFamily: 'serif' }}>
+                                                {(e.q2_meet || '匿')[0]}
+                                            </div>
+                                            <div>
+                                                <p className="font-bold text-[#2c1810] text-sm">{e.q2_meet || '匿名读者'}</p>
+                                                <p className="text-[10px] text-[#8b7355]">{new Date(e.created_at).toLocaleString('zh-CN')}</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-[10px] text-[#b8a99a] font-mono">#{String(e.id).padStart(4, '0')}</span>
+                                    </div>
+
+                                    {/* 评价内容 */}
+                                    <div className="space-y-2.5 text-sm">
+                                        <div className="flex gap-2">
+                                            <span className="text-[#b22222] font-bold shrink-0">Q1 相识</span>
+                                            <span className="text-[#2c1810]">{e.q1_meet || '-'}</span>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <span className="text-[#b22222] font-bold shrink-0">Q2 关系</span>
+                                            <span className="text-[#2c1810]">{e.q2_relation || '-'}</span>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <span className="text-[#8b7355] font-bold shrink-0">Q3 初印</span>
+                                            <span className="text-[#2c1810] italic">{e.q3_first_impression || '未填写'}</span>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <span className="text-[#8b7355] font-bold shrink-0">Q4 为人</span>
+                                            <span className="text-[#2c1810] italic">{e.q4_personality || '未填写'}</span>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <span className="text-[#8b7355] font-bold shrink-0">Q5 寄语</span>
+                                            <span className="text-[#2c1810] italic">{e.q5_message || '未填写'}</span>
+                                        </div>
+                                    </div>
+
+                                    {/* 照片预览 */}
+                                    {e.photo_url && (
+                                        <div className="mt-4 pt-4 border-t border-[#d4c5b2]/20">
+                                            <img src={e.photo_url}
+                                                 alt="评价附图"
+                                                 className="w-full max-h-64 object-cover rounded-xl border border-[#d4c5b2]/30 cursor-pointer hover:shadow-lg transition-shadow"
+                                                 onClick={() => window.open(e.photo_url, '_blank')} />
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ======================== AddBook ========================
+        function AddBook() {
+            const DRAFT_KEY = "ADD_BOOK_DRAFT";
+            const [f, setF] = useState(() => {
+                const savedDraft = localStorage.getItem(DRAFT_KEY);
+                return savedDraft ? JSON.parse(savedDraft) : { title: '', isbn: '', author: '', category: '计算机科学', total: 5, cover: '', location: '' };
+            });
+            const [pdfFile, setPdfFile] = useState(null);
+            const [isUploading, setIsUploading] = useState(false);
+            useEffect(() => { localStorage.setItem(DRAFT_KEY, JSON.stringify(f)); }, [f]);
 
             const handleFileSelect = (e) => {
                 const file = e.target.files[0];
@@ -378,71 +1243,136 @@
             const submit = async (e) => {
                 e.preventDefault();
                 if (!f.title || !f.isbn) return alert("书名和 ISBN 不能为空");
-                
-                const newBook = {
-                    isbn: f.isbn,
-                    title: f.title,
-                    author: f.author || '未知',
-                    category: f.category,
-                    total: parseInt(f.total),
-                    available: parseInt(f.total),
-                    location: f.location || '暂无架位',
-                    cover: f.cover || 'https://via.placeholder.com/300x400?text=No+Cover'
-                };
-
-                const { error } = await supabase.from('books').insert([newBook]);
-
-                if (error) {
-                    alert("云端入库失败：" + error.message);
-                } else {
+                if (!f.total || parseInt(f.total) < 1) return alert("入库复本量至少为 1");
+                if (!f.location) return alert("请填写馆藏架位");
+                const { data: existing } = await supabase.from('books').select('id').eq('isbn', f.isbn).maybeSingle();
+                if (existing) return alert("该书已存在，请检查 ISBN");
+                setIsUploading(true);
+                let finalPdfUrl = '';
+                try {
+                    if (pdfFile) {
+                        const ext = pdfFile.name.split('.').pop() || 'pdf';
+                        const filePath = `book_${Date.now()}.${ext}`;
+                        const { error: uploadError } = await supabase.storage.from('books-pdf').upload(filePath, pdfFile);
+                        if (uploadError) throw uploadError;
+                        const { data: urlData } = supabase.storage.from('books-pdf').getPublicUrl(filePath);
+                        finalPdfUrl = urlData.publicUrl;
+                    }
+                    const newBook = {
+                        isbn: f.isbn, title: f.title, author: f.author || '未知',
+                        category: f.category, total: parseInt(f.total), available: parseInt(f.total),
+                        location: f.location || '密集书库',
+                        cover: f.cover || 'https://via.placeholder.com/300x400?text=No+Cover',
+                        pdf_url: finalPdfUrl
+                    };
+                    const { error } = await supabase.from('books').insert([newBook]);
+                    if (error) throw error;
                     alert("✅ 云端实时同步成功！");
-                    localStorage.removeItem(DRAFT_KEY);
-                    setF({ title: '', isbn: '', author: '', category: '通用', total: 5, cover: '', location: '' });
+                    setPdfFile(null);
+                    setF({ title: '', isbn: '', author: '', category: '计算机科学', total: 5, cover: '', location: '' });
+                } catch (err) {
+                    alert("操作失败：" + (err.message || err));
+                } finally {
+                    setIsUploading(false);
                 }
             };
 
             return (
-                <div className="max-w-2xl mx-auto animate-in">
-                    <h2 className="text-3xl font-black mb-10 text-center">新书入库编目</h2>
-                    <form onSubmit={submit} className="bg-white p-10 rounded-[3rem] shadow-xl border border-slate-100 grid grid-cols-2 gap-6">
-                        <Field label="书名" value={f.title} onChange={v=>setF({...f, title: v})} />
-                        <Field label="ISBN" value={f.isbn} onChange={v=>setF({...f, isbn: v})} />
-                        <Field label="作者" value={f.author} onChange={v=>setF({...f, author: v})} />
-                        <Field label="分类" value={f.category} onChange={v=>setF({...f, category: v})} />
-                        <Field label="架位" value={f.location} onChange={v=>setF({...f, location: v})} placeholder="如: 3F-A1" />
-                        <Field label="数量" type="number" value={f.total} onChange={v=>setF({...f, total: v})} />
+                <div className="max-w-3xl mx-auto animate-in">
+                    <div className="text-center mb-10">
+                        <h2 className="text-3xl font-black text-[#2c1810]" style={{ fontFamily: 'serif' }}>新文献入库编目</h2>
+                        <p className="text-[#8b7355] text-sm mt-2">录入数据将实时同步至云端馆藏库</p>
+                    </div>
+                    <form onSubmit={submit} className="bg-white p-10 rounded-[3rem] shadow-sm border border-[#d4c5b2]/30 grid grid-cols-2 gap-6 relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-[#b22222]/5 rounded-bl-[100px] -z-10"></div>
+                        <Field label="标准书号 (ISBN)" value={f.isbn} onChange={v => setF({ ...f, isbn: v })} placeholder="如: 978-7-302-..." />
+                        <Field label="文献正题名" value={f.title} onChange={v => setF({ ...f, title: v })} placeholder="书名" />
+                        <Field label="责任者 (作者)" value={f.author} onChange={v => setF({ ...f, author: v })} placeholder="作者编者" />
+                        <Field label="中图分类号/类别" value={f.category} onChange={v => setF({ ...f, category: v })} />
+                        <Field label="物理馆藏架位" value={f.location} onChange={v => setF({ ...f, location: v })} placeholder="如: 北馆 3F-A1区" />
+                        <Field label="入库复本量" type="number" value={f.total} onChange={v => setF({ ...f, total: v })} />
 
-                        <div className="col-span-2 space-y-3">
-                            <label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">封面图片</label>
-                            <div className="flex items-end gap-6">
-                                <input type="file" accept="image/*" onChange={handleFileSelect}
-                                    className="flex-1 p-3.5 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 ring-purple-500 outline-none transition-all file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100" />
-                                {f.cover && <img src={f.cover} alt="预览" className="w-28 h-36 object-cover rounded-2xl shadow-md border border-slate-200" />}
+                        <div className="col-span-2 space-y-3 p-5 bg-[#faf6f0]/50 rounded-2xl border border-[#d4c5b2]/30">
+                            <label className="text-[10px] font-black text-[#8b7355] uppercase tracking-widest">书影采集 (封面图)</label>
+                            <div className="flex flex-col md:flex-row items-center gap-6">
+                                {f.cover ? (
+                                    <img src={f.cover} alt="预览" className="w-28 h-36 object-cover rounded-xl shadow-md border border-[#d4c5b2]/30" />
+                                ) : (
+                                    <div className="w-28 h-36 border-2 border-dashed border-[#d4c5b2] rounded-xl flex items-center justify-center text-[#b8a99a] bg-white">
+                                        <Icon name="image" size={24} />
+                                    </div>
+                                )}
+                                <div className="flex-1 w-full space-y-3">
+                                    <input type="file" accept="image/*" onChange={handleFileSelect}
+                                           className="w-full text-sm text-[#8b7355] file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-bold file:bg-white file:text-[#b22222] file:shadow-sm hover:file:bg-[#b22222]/5 transition-all cursor-pointer" />
+                                    <div className="flex items-center gap-2">
+                                        <hr className="flex-1 border-[#d4c5b2]/30" />
+                                        <span className="text-xs text-[#8b7355] font-medium uppercase">OR</span>
+                                        <hr className="flex-1 border-[#d4c5b2]/30" />
+                                    </div>
+                                    <input type="text" value={f.cover && !f.cover.startsWith('data:') ? f.cover : ''}
+                                           onChange={e => setF({ ...f, cover: e.target.value })}
+                                           placeholder="在此粘贴网络图片 URL 链接"
+                                           className="w-full p-3 bg-white border border-[#d4c5b2]/30 rounded-xl text-sm focus:ring-2 ring-[#8b4513]/30 outline-none transition-all shadow-sm text-[#2c1810]" />
+                                </div>
                             </div>
-                            <p className="text-[10px] text-slate-400">✅ 支持本地图片，刷新页面也不会丢失</p>
-                            <input type="text" value={f.cover && !f.cover.startsWith('data:') ? f.cover : ''} 
-                                onChange={e => setF({...f, cover: e.target.value})}
-                                placeholder="或粘贴图片 URL"
-                                className="w-full p-3.5 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 ring-purple-500 outline-none transition-all" />
                         </div>
 
-                        <button type="submit" className="col-span-2 py-4 thu-purple text-white rounded-2xl font-bold mt-6 shadow-lg shadow-purple-100 active:scale-95 transition-all">确认入库并分编</button>
+                        <div className="col-span-2 space-y-3 p-5 bg-[#faf6f0]/50 rounded-2xl border border-[#d4c5b2]/30">
+                            <label className="text-[10px] font-black text-[#8b7355] uppercase tracking-widest">电子书 PDF 上传</label>
+                            <div className="flex flex-col md:flex-row items-center gap-6">
+                                {pdfFile ? (
+                                    <div className="w-40 h-12 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-center text-emerald-700 font-medium text-sm gap-2 px-4">
+                                        <Icon name="file-text" size={20} />
+                                        {pdfFile.name.length > 22 ? pdfFile.name.substring(0, 19) + '...' : pdfFile.name}
+                                    </div>
+                                ) : (
+                                    <div className="w-40 h-12 border-2 border-dashed border-[#d4c5b2] rounded-2xl flex items-center justify-center text-[#b8a99a] bg-white">
+                                        <Icon name="file" size={24} />
+                                    </div>
+                                )}
+                                <div className="flex-1 w-full">
+                                    <input type="file" accept="application/pdf"
+                                           onChange={e => {
+                                               const file = e.target.files[0];
+                                               if (file) {
+                                                   if (file.type !== 'application/pdf') { alert('仅支持 PDF 格式！'); return; }
+                                                   setPdfFile(file);
+                                               }
+                                           }}
+                                           className="w-full text-sm text-[#8b7355] file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-bold file:bg-white file:text-[#b22222] file:shadow-sm hover:file:bg-[#b22222]/5 transition-all cursor-pointer" />
+                                </div>
+                            </div>
+                            {pdfFile && <p className="text-xs text-emerald-600 mt-1">已选中 • {(pdfFile.size / 1024 / 1024).toFixed(2)} MB</p>}
+                        </div>
+
+                        <button type="submit" disabled={isUploading}
+                                className="col-span-2 py-4 bg-gradient-to-r from-[#b22222] to-[#8b1a1a] text-white rounded-2xl font-bold mt-4 shadow-lg shadow-[#b22222]/20 active:scale-95 transition-all text-lg tracking-wide disabled:opacity-70 flex items-center justify-center gap-2">
+                            {isUploading ? (
+                                <><Icon name="loader-2" size={20} className="animate-spin" /> 上传中…</>
+                            ) : (
+                                <><Icon name="save" className="inline-block -mt-1" size={20} /> 确认入库并发布</>
+                            )}
+                        </button>
                     </form>
                 </div>
             );
         }
 
+        // ======================== 基础组件 ========================
         const NavBtn = ({ icon, label, active, onClick }) => (
-            <button onClick={onClick} className={`w-full flex items-center gap-4 px-6 py-4 rounded-2xl font-bold transition-all ${active ? 'bg-purple-600 text-white shadow-lg shadow-purple-100 translate-x-1' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-800'}`}>
-                <Icon name={icon} size={20} />
+            <button onClick={onClick}
+                    className={`w-full flex items-center gap-4 px-5 py-3.5 rounded-2xl font-bold transition-all ${active ? 'bg-gradient-to-r from-[#2c1810] to-[#4a2c1a] text-white shadow-md' : 'text-[#8b7355] hover:bg-[#faf6f0] hover:text-[#2c1810]'}`}>
+                <Icon name={icon} size={18} className={active ? 'text-white' : ''} />
                 <span className="text-sm">{label}</span>
             </button>
         );
 
-        const Field = ({ label, value, onChange, type="text", placeholder }) => (
-            <div className="space-y-1">
-                <label className="text-[10px] font-black text-slate-400 uppercase ml-2 tracking-widest">{label}</label>
-                <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} className="w-full p-3.5 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 ring-purple-500 outline-none transition-all" required />
+        const Field = ({ label, value, onChange, type = "text", placeholder, disabled = false }) => (
+            <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-[#8b7355] uppercase ml-2 tracking-widest">{label}</label>
+                <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled}
+                       className="w-full p-3.5 bg-[#faf6f0] border border-[#d4c5b2]/30 rounded-xl text-sm focus:ring-2 ring-[#8b4513]/30 outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed text-[#2c1810] placeholder-[#b8a99a]" required />
             </div>
         );
 
